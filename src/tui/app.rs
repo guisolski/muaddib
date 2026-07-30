@@ -105,7 +105,6 @@ pub struct App {
     pub notice: Option<String>,
     pub search: Option<SearchHandle>,
     pub started_at: Option<Instant>,
-    pub should_quit: bool,
 }
 
 impl App {
@@ -132,7 +131,6 @@ impl App {
             notice: None,
             search: None,
             started_at: None,
-            should_quit: false,
         }
     }
 
