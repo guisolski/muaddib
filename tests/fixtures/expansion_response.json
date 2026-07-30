@@ -1,0 +1,7 @@
+{
+  "subqueries": [
+    {"query": "rust async runtimes comparison", "lang": "en", "rationale": "direct facet"},
+    {"query": "tokio vs async-std benchmarks", "lang": "en", "rationale": "performance facet"},
+    {"query": "runtimes assincronos rust", "lang": "pt-BR", "rationale": "cross-language coverage"}
+  ]
+}

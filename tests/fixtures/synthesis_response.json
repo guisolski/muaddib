@@ -1,0 +1,7 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "{\"title\":\"Rust async runtimes\",\"language\":\"en\",\"blocks\":[{\"type\":\"heading\",\"level\":2,\"text\":\"Overview\"},{\"type\":\"paragraph\",\"text\":\"Tokio leads adoption in production systems.\",\"source_ids\":[1]},{\"type\":\"paragraph\",\"text\":\"smol offers a deliberately small design.\",\"source_ids\":[2]},{\"type\":\"paragraph\",\"text\":\"This claim cites a source the searches never saw.\",\"source_ids\":[3]},{\"type\":\"chart\",\"chart_type\":\"bar\",\"title\":\"Popularity\",\"unit\":\"%\",\"labels\":[\"tokio\",\"smol\"],\"values\":[80.0,20.0],\"source_ids\":[1,2]}],\"sources\":[{\"id\":1,\"title\":\"Tokio documentation\",\"url\":\"https://tokio.rs/tokio/tutorial\",\"lang\":\"en\"},{\"id\":2,\"title\":\"smol repository\",\"url\":\"https://github.com/smol-rs/smol\",\"lang\":\"en\"},{\"id\":3,\"title\":\"Invented\",\"url\":\"https://invented.example/nope\",\"lang\":\"en\"}],\"followups\":[\"tokio scheduler internals\"]}",
+  "session_id": "0000-fixture"
+}

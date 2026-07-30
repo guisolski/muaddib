@@ -1,5 +1,6 @@
 [default.extend-words]
 avances = "avances"
+tema = "tema"
 
 [files]
 extend-exclude = ["tests/fixtures/*.json"]

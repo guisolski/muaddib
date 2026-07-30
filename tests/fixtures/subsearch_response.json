@@ -1,0 +1,17 @@
+{
+  "summary": "Tokio dominates production usage while smol targets simplicity.",
+  "findings": [
+    {
+      "claim": "Tokio is the most widely used async runtime in Rust",
+      "source_title": "Tokio documentation",
+      "source_url": "https://tokio.rs/tokio/tutorial",
+      "lang": "en"
+    },
+    {
+      "claim": "smol focuses on a small and simple runtime design",
+      "source_title": "smol repository",
+      "source_url": "https://github.com/smol-rs/smol",
+      "lang": "en"
+    }
+  ]
+}
