@@ -1,3 +1,179 @@
-# faro
+# ▲ faro
 
-AI-powered meta-search for your terminal. Work in progress.
+> Sniff out answers. Every claim, sourced.
+
+[![CI](https://github.com/guisolski/faro/actions/workflows/ci.yml/badge.svg)](https://github.com/guisolski/faro/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.93%2B-orange.svg)](Cargo.toml)
+
+**faro** (Portuguese: *"ter faro"* — an instinct for finding things) is an AI-powered
+meta-search engine that lives in your terminal. Type a question, and faro expands it
+into multiple sub-queries — across facets *and* languages — runs them in parallel
+through the AI CLI you already have installed, and compiles one synthesized answer
+where **every claim carries a verified source link**.
+
+```
+                                ▲ faro
+
+                ╭──────────────────────────────────────╮
+                │ why is the sky blue?                 │
+                ╰──────────────────────────────────────╯
+                 General · Scientific · News · Deep
+
+        engine: claude ●  │  lang: pt-BR  │  Enter search · F2 config
+```
+
+## Why faro?
+
+- **It searches beyond your words.** Your query is expanded into distinct facets and
+  translated variants (the topic's origin language, English, …), so the answer draws
+  from sources a literal search would never reach.
+- **Every claim is cited.** The answer is a structured document where each paragraph,
+  list item, table, and chart references numbered sources. URLs that don't come from
+  the actual searches are ejected, and every link is health-checked (HTTP HEAD) live.
+- **No API keys.** faro drives the AI CLIs you already use — `claude`, `cursor-agent`,
+  `codex`, `opencode` — as subprocesses, reusing their auth and their built-in web
+  search.
+- **Fast and light.** A single small Rust binary. Sub-searches fan out concurrently
+  with bounded parallelism; the UI stays at 60fps-smooth 100ms ticks; Esc cancels
+  everything and reaps child processes instantly.
+
+## Features
+
+- Minimalist TUI: one centered search bar, four focus modes (`General`, `Scientific`,
+  `News`, `Deep`)
+- Multilingual query expansion with a deterministic offline fallback
+- Parallel fan-out with per-sub-query live progress
+- Structured answers: headings, paragraphs, lists, quotes, tables, and terminal
+  bar charts — all cited
+- Live link validation (✓ / ✗ 404) directly in the sources list
+- Config modal (F2): answer language, engine, link validation, parallelism
+- Headless mode (`--print`) that emits the answer as JSON for scripting
+- Answer language follows your config (default: `pt-BR`) — search in any language,
+  read in yours
+
+## Requirements
+
+- Rust 1.93+ (to build)
+- At least one supported AI CLI on your `PATH`:
+
+| Engine | Binary | Web search | Structured output | Install |
+|---|---|---|---|---|
+| Claude Code | `claude` | ✓ (WebSearch tool) | ✓ (`--json-schema`) | `npm install -g @anthropic-ai/claude-code` |
+| Cursor CLI | `cursor-agent` | model-dependent | prompt-enforced | `curl https://cursor.com/install -fsS \| bash` |
+| Codex CLI | `codex` | model-dependent | prompt-enforced | `npm install -g @openai/codex` |
+| opencode | `opencode` | model-dependent | prompt-enforced | `npm install -g opencode-ai` |
+
+Engines that are not installed appear greyed out in the config modal; faro falls back
+to the first available engine automatically.
+
+## Install
+
+```sh
+git clone https://github.com/guisolski/faro
+cd faro
+make install        # cargo install --path .
+```
+
+## Usage
+
+```sh
+faro                          # open the TUI
+faro "quantum computing"      # open the TUI and search immediately
+faro --mode scientific "CRISPR delivery methods"
+faro --lang en --engine claude "energia solar no brasil"
+faro --print "rust 1.93 release highlights" > answer.json   # headless JSON
+```
+
+### Keybindings
+
+| Scope | Key | Action |
+|---|---|---|
+| Everywhere | `Ctrl+C` | quit |
+| Everywhere | `F1` | toggle help |
+| Everywhere | `F2` | open config |
+| Everywhere | `Esc` | back / cancel search / close modal |
+| Home | `Enter` | search |
+| Home | `Tab` / `Shift+Tab` | cycle search mode |
+| Results | `j`/`k`/`↓`/`↑` | scroll |
+| Results | `PgDn`/`PgUp`/`g`/`G` | page / top / bottom |
+| Results | `Tab` | focus sources (then `Enter` opens the link) |
+| Results | `n` | new search |
+| Results | `/` | refine current search |
+| Results | `q` | quit |
+
+The in-app help (F1) is generated from the same keymap table, so it never drifts.
+
+## How it works
+
+```mermaid
+flowchart LR
+    Q[query] --> E[expand<br/>1 engine call]
+    E -->|"sub-queries<br/>(multi-facet, multi-language)"| F1[search 1]
+    E --> F2[search 2]
+    E --> F3[search N]
+    F1 --> M[merge + dedupe<br/>by normalized URL]
+    F2 --> M
+    F3 --> M
+    M --> S[synthesize<br/>1 engine call + JSON schema]
+    S --> R[renumber citations<br/>eject invented URLs]
+    R --> V[validate links<br/>parallel HTTP HEAD]
+    V --> A[cited answer]
+```
+
+1. **Expand** — one engine call turns your query into up to N sub-queries covering
+   distinct facets, including at least one in another relevant language. If the call
+   fails, a deterministic per-mode fallback table keeps the search alive.
+2. **Fan-out** — sub-searches run concurrently (`buffer_unordered`, bounded by
+   `max_parallel`), each returning claims with exact source URLs.
+3. **Merge** — findings are deduplicated by normalized URL + claim.
+4. **Synthesize** — one final engine call compiles everything into a structured JSON
+   answer in *your* language, validated against a JSON Schema. Sources whose URLs
+   never appeared in the findings are ejected (anti-hallucination gate) and citations
+   are renumbered in first-use order.
+5. **Validate** — every source URL gets a parallel HTTP HEAD check; the sources list
+   updates live with ✓ / ✗.
+
+Read more in [`docs/`](docs/): [architecture](docs/architecture.md) ·
+[engines](docs/engines.md) · [search pipeline](docs/search-pipeline.md) ·
+[configuration](docs/configuration.md) · [development](docs/development.md) ·
+[ADRs](docs/adr/)
+
+## Configuration
+
+`~/.config/faro/config.toml` (or `$XDG_CONFIG_HOME/faro/config.toml`, or `$FARO_CONFIG`):
+
+```toml
+language = "pt-BR"          # answer language (BCP-47)
+engine = "claude"           # claude | cursor-agent | codex | opencode
+max_parallel = 4            # concurrent sub-searches (1-8)
+expansion_breadth = 0       # 0 = use the mode default
+validate_links = true       # HTTP HEAD check on every source
+engine_timeout_secs = 180
+
+[engines.claude]            # optional per-engine binary override
+bin = "/custom/path/claude"
+```
+
+## Development
+
+```sh
+make hooks      # install pre-commit hooks (fmt, clippy, tests, no-comments guard...)
+make test       # run the full test suite (fake engine, no network, no AI calls)
+make ci         # what CI runs: fmt-check + clippy -D warnings + tests + release build
+```
+
+The project follows TDD with table-driven tests, a pure functional core (zero I/O in
+`src/core/`), and a no-comments convention — intent lives in named functions and in
+`/docs`. See [docs/development.md](docs/development.md).
+
+## Roadmap
+
+- Inline images in the terminal (kitty/iTerm2/sixel via `ratatui-image`, `chafa` fallback)
+- Video results as external links
+- Search history and answer cache
+- More engines (adding one is a single table row — see [docs/engines.md](docs/engines.md))
+
+## License
+
+[MIT](LICENSE)
