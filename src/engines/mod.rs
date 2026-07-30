@@ -172,8 +172,7 @@ pub fn find_executable(bin: &str) -> Option<PathBuf> {
 pub fn is_executable_file(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path)
-        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
 pub fn detect_engines(config: &Config) -> Vec<EngineStatus> {
