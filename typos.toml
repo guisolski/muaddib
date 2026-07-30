@@ -1,0 +1,5 @@
+[default.extend-words]
+avances = "avances"
+
+[files]
+extend-exclude = ["tests/fixtures/*.json"]
