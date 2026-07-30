@@ -1,0 +1,7 @@
+{
+  "type": "result",
+  "subtype": "error_during_execution",
+  "is_error": true,
+  "result": "Credit balance is too low",
+  "session_id": "0000-fixture"
+}

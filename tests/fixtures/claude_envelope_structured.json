@@ -1,0 +1,13 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "I produced the structured answer.",
+  "structured_output": {
+    "title": "Structured",
+    "language": "en",
+    "blocks": [],
+    "sources": []
+  },
+  "session_id": "0000-fixture"
+}

@@ -1,0 +1,8 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "duration_ms": 4321,
+  "result": "{\"summary\":\"inner payload\",\"findings\":[]}",
+  "session_id": "0000-fixture"
+}
