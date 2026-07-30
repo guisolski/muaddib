@@ -10,15 +10,26 @@ use tokio::process::Command;
 pub struct CliEngine {
     spec: &'static EngineSpec,
     bin: PathBuf,
+    model: Option<String>,
 }
 
 impl CliEngine {
     pub fn new(spec: &'static EngineSpec, bin: PathBuf) -> Self {
-        Self { spec, bin }
+        Self {
+            spec,
+            bin,
+            model: None,
+        }
     }
 
     pub fn from_status(status: &EngineStatus) -> Option<Self> {
         status.path.clone().map(|bin| Self::new(status.spec, bin))
+    }
+
+    #[must_use]
+    pub fn with_model(mut self, model: Option<String>) -> Self {
+        self.model = model;
+        self
     }
 
     async fn run_cli(&self, job: &EngineJob) -> Result<EngineOutput, EngineError> {
@@ -36,7 +47,7 @@ impl CliEngine {
     fn command(&self, job: &EngineJob) -> Command {
         let mut command = Command::new(&self.bin);
         command
-            .args(build_args(self.spec, job))
+            .args(build_args(self.spec, self.model.as_deref(), job))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -90,6 +101,8 @@ mod tests {
         args: &[],
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
+        model_flag: None,
+        models: &[],
         install_hint: "",
     };
 
@@ -100,6 +113,8 @@ mod tests {
         args: &["-c", "echo boom >&2; exit 3"],
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
+        model_flag: None,
+        models: &[],
         install_hint: "",
     };
 
@@ -110,6 +125,8 @@ mod tests {
         args: &["-c", "sleep 5"],
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
+        model_flag: None,
+        models: &[],
         install_hint: "",
     };
 
@@ -126,6 +143,26 @@ mod tests {
         let engine = CliEngine::new(&ECHO_SPEC, PathBuf::from("/bin/echo"));
         let output = engine.run(&job("hello world", 5_000)).await.unwrap();
         assert_eq!(output.text.trim(), "hello world");
+    }
+
+    const MODEL_ECHO_SPEC: EngineSpec = EngineSpec {
+        id: EngineId::Opencode,
+        name: "model-echo-fake",
+        bin: "echo",
+        args: &[],
+        parse: ParseStrategy::RawText,
+        supports_json_schema: false,
+        model_flag: Some("--model"),
+        models: &["fast"],
+        install_hint: "",
+    };
+
+    #[tokio::test]
+    async fn run_forwards_the_configured_model_to_the_process() {
+        let engine = CliEngine::new(&MODEL_ECHO_SPEC, PathBuf::from("/bin/echo"))
+            .with_model(Some("fast".to_string()));
+        let output = engine.run(&job("hello", 5_000)).await.unwrap();
+        assert_eq!(output.text.trim(), "--model fast hello");
     }
 
     #[tokio::test]

@@ -106,6 +106,11 @@ fn start_search(app: &mut App, query: String) {
             let Some(engine) = CliEngine::from_status(status) else {
                 return;
             };
+            let engine = engine.with_model(
+                app.config
+                    .model_override(status.spec.name)
+                    .map(str::to_string),
+            );
             let request = SearchRequest::from_config(query, app.current_mode(), &app.config);
             app.begin_search();
             app.notice = notice;

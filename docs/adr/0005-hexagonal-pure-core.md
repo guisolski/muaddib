@@ -32,7 +32,7 @@ Split the crate into a **pure core** (`src/core/`) and **thin adapters**:
   subprocesses — they run in milliseconds and never flake.
 - The subprocess boundary is covered by one fake shell script; the reducer is
   tested by feeding synthetic key and search events.
-- The F1 help screen renders from `KEYMAP` itself, so documentation cannot
+- The help screen renders from `KEYMAP` itself, so documentation cannot
   drift from behavior (DRY applied to UX).
 - Cost: some ceremony — events and commands instead of direct calls — accepted
   for testability.

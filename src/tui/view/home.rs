@@ -90,15 +90,19 @@ fn status_line(app: &App) -> Line<'static> {
     } else {
         theme::err()
     };
+    let model = app
+        .config
+        .model_override(&app.config.engine)
+        .unwrap_or("default");
     Line::from(vec![
         Span::styled(format!("engine: {} ", app.config.engine), theme::dim()),
         Span::styled("●", dot_style),
         Span::styled(
-            format!("  │  lang: {}  │  ", app.config.language),
+            format!("  │  model: {model}  │  lang: {}  │  ", app.config.language),
             theme::dim(),
         ),
         Span::styled(
-            "Enter search · Tab mode · F2 config · F1 help",
+            "Enter search · Tab mode · Ctrl+O config · Ctrl+G help",
             theme::dim(),
         ),
     ])

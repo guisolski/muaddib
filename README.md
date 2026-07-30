@@ -20,7 +20,7 @@ where **every claim carries a verified source link**.
                 ╰──────────────────────────────────────╯
                  General · Scientific · News · Deep
 
-        engine: claude ●  │  lang: pt-BR  │  Enter search · F2 config
+     engine: claude ●  │  model: default  │  lang: pt-BR  │  Ctrl+O config
 ```
 
 ## Why faro?
@@ -47,7 +47,7 @@ where **every claim carries a verified source link**.
 - Structured answers: headings, paragraphs, lists, quotes, tables, and terminal
   bar charts — all cited
 - Live link validation (✓ / ✗ 404) directly in the sources list
-- Config modal (F2): answer language, engine, link validation, parallelism
+- Config modal (`Ctrl+O`): answer language, engine, model, link validation, parallelism
 - Headless mode (`--print`) that emits the answer as JSON for scripting
 - Answer language follows your config (default: `pt-BR`) — search in any language,
   read in yours
@@ -82,6 +82,7 @@ faro                          # open the TUI
 faro "quantum computing"      # open the TUI and search immediately
 faro --mode scientific "CRISPR delivery methods"
 faro --lang en --engine claude "energia solar no brasil"
+faro --model haiku "capital of australia"   # pass a model to the engine CLI
 faro --print "rust 1.93 release highlights" > answer.json   # headless JSON
 ```
 
@@ -90,8 +91,8 @@ faro --print "rust 1.93 release highlights" > answer.json   # headless JSON
 | Scope | Key | Action |
 |---|---|---|
 | Everywhere | `Ctrl+C` | quit |
-| Everywhere | `F1` | toggle help |
-| Everywhere | `F2` | open config |
+| Everywhere | `Ctrl+G` | toggle help |
+| Everywhere | `Ctrl+O` | open config |
 | Everywhere | `Esc` | back / cancel search / close modal |
 | Home | `Enter` | search |
 | Home | `Tab` / `Shift+Tab` | cycle search mode |
@@ -102,7 +103,7 @@ faro --print "rust 1.93 release highlights" > answer.json   # headless JSON
 | Results | `/` | refine current search |
 | Results | `q` | quit |
 
-The in-app help (F1) is generated from the same keymap table, so it never drifts.
+The in-app help (`Ctrl+G`) is generated from the same keymap table, so it never drifts.
 
 ## How it works
 
@@ -151,8 +152,9 @@ expansion_breadth = 0       # 0 = use the mode default
 validate_links = true       # HTTP HEAD check on every source
 engine_timeout_secs = 180
 
-[engines.claude]            # optional per-engine binary override
-bin = "/custom/path/claude"
+[engines.claude]            # optional per-engine overrides
+bin = "/custom/path/claude" # binary path
+model = "sonnet"            # model passed to the CLI (any value it accepts)
 ```
 
 ## Development

@@ -12,6 +12,7 @@ make test
 
 | Target | What it does |
 |---|---|
+| `make` / `make help` | list every target (default) |
 | `make build` / `make release` | debug / release build |
 | `make test` | `cargo test --all-features` |
 | `make lint` | clippy, all targets, `-D warnings` |

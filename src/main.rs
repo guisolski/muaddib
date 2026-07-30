@@ -24,6 +24,9 @@ struct Cli {
     #[arg(long, help = "Engine CLI to use for this run")]
     engine: Option<String>,
 
+    #[arg(long, help = "Model passed to the engine CLI for this run")]
+    model: Option<String>,
+
     #[arg(long, help = "Answer language for this run, as a BCP-47 tag")]
     lang: Option<String>,
 
@@ -57,6 +60,10 @@ fn apply_cli_overrides(mut config: Config, cli: &Cli) -> Config {
     if let Some(engine) = &cli.engine {
         config.engine.clone_from(engine);
     }
+    if let Some(model) = &cli.model {
+        let engine = config.engine.clone();
+        config.set_model_override(&engine, Some(model.clone()));
+    }
     if let Some(lang) = &cli.lang {
         config.language.clone_from(lang);
     }
@@ -75,7 +82,9 @@ async fn run_headless(cli: &Cli, config: &Config, statuses: &[EngineStatus]) -> 
     if let Some(notice) = engine_notice {
         eprintln!("faro: {notice}");
     }
-    let engine = CliEngine::from_status(status).expect("an available engine has a resolved path");
+    let engine = CliEngine::from_status(status)
+        .expect("an available engine has a resolved path")
+        .with_model(config.model_override(status.spec.name).map(str::to_string));
     let mode = cli.mode.unwrap_or(Mode::General);
     let request = SearchRequest::from_config(query, mode, config);
     stream_search_to_stdio(Arc::new(engine), request).await

@@ -24,6 +24,8 @@ pub struct EngineSpec {
     pub args: &'static [&'static str],
     pub parse: ParseStrategy,
     pub supports_json_schema: bool,
+    pub model_flag: Option<&'static str>,
+    pub models: &'static [&'static str],
     pub install_hint: &'static str,
 }
 
@@ -40,6 +42,8 @@ pub const ENGINES: &[EngineSpec] = &[
         ],
         parse: ParseStrategy::ClaudeJson,
         supports_json_schema: true,
+        model_flag: Some("--model"),
+        models: &["opus", "sonnet", "haiku"],
         install_hint: "npm install -g @anthropic-ai/claude-code",
     },
     EngineSpec {
@@ -49,6 +53,8 @@ pub const ENGINES: &[EngineSpec] = &[
         args: &["-p", "--output-format", "json"],
         parse: ParseStrategy::GenericJson,
         supports_json_schema: false,
+        model_flag: Some("--model"),
+        models: &["auto", "gpt-5", "sonnet-4.5"],
         install_hint: "curl https://cursor.com/install -fsS | bash",
     },
     EngineSpec {
@@ -58,6 +64,8 @@ pub const ENGINES: &[EngineSpec] = &[
         args: &["exec", "--skip-git-repo-check"],
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
+        model_flag: Some("--model"),
+        models: &["gpt-5-codex", "gpt-5"],
         install_hint: "npm install -g @openai/codex",
     },
     EngineSpec {
@@ -67,6 +75,8 @@ pub const ENGINES: &[EngineSpec] = &[
         args: &["run"],
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
+        model_flag: Some("--model"),
+        models: &["anthropic/claude-sonnet-4-5", "openai/gpt-5"],
         install_hint: "npm install -g opencode-ai",
     },
 ];
@@ -112,8 +122,12 @@ pub trait Engine: Send + Sync {
     fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a>;
 }
 
-pub fn build_args(spec: &EngineSpec, job: &EngineJob) -> Vec<String> {
+pub fn build_args(spec: &EngineSpec, model: Option<&str>, job: &EngineJob) -> Vec<String> {
     let mut args: Vec<String> = spec.args.iter().map(ToString::to_string).collect();
+    if let (Some(flag), Some(model)) = (spec.model_flag, model) {
+        args.push(flag.to_string());
+        args.push(model.to_string());
+    }
     if spec.supports_json_schema
         && let Some(schema) = job.schema
     {
@@ -230,10 +244,30 @@ mod tests {
     #[test]
     fn build_args_places_the_prompt_last() {
         for spec in ENGINES {
-            let args = build_args(spec, &job("the prompt", None));
+            let args = build_args(spec, Some("some-model"), &job("the prompt", None));
             assert_eq!(
                 args.last().map(String::as_str),
                 Some("the prompt"),
+                "{}",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn build_args_adds_the_model_flag_only_when_a_model_is_set() {
+        for spec in ENGINES {
+            let with_model = build_args(spec, Some("some-model"), &job("p", None));
+            let without_model = build_args(spec, None, &job("p", None));
+            assert!(
+                with_model.windows(2).any(|pair| {
+                    pair[0] == spec.model_flag.unwrap_or_default() && pair[1] == "some-model"
+                }),
+                "{}",
+                spec.name
+            );
+            assert!(
+                !without_model.iter().any(|arg| arg == "some-model"),
                 "{}",
                 spec.name
             );
@@ -270,7 +304,7 @@ mod tests {
         ];
         for case in cases {
             let spec = engine_by_name(case.engine).unwrap();
-            let args = build_args(spec, &job("p", case.schema));
+            let args = build_args(spec, None, &job("p", case.schema));
             assert_eq!(
                 args.iter().any(|arg| arg == "--json-schema"),
                 case.want_flag,

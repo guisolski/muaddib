@@ -15,7 +15,11 @@ Every engine is one row in `ENGINES` (`src/engines/mod.rs`):
 | `opencode` | `opencode` | `run` | `RawText` | prompt-enforced |
 
 `build_args` appends the prompt as the **last argv element** — never through a
-shell, so there is no injection surface. For engines with `supports_json_schema`,
+shell, so there is no injection surface. When a model is configured (config
+modal, `[engines.<name>] model`, or `--model`), the engine's `model_flag`
+(`--model` for all current engines) and the value are inserted before the
+prompt; each spec also carries a curated `models` list that feeds the config
+modal's choices. For engines with `supports_json_schema`,
 the synthesis call also appends `--json-schema <schema>` so the CLI itself
 validates the structured output; other engines get the schema inlined in the
 prompt text instead.

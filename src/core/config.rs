@@ -23,6 +23,13 @@ pub struct Config {
 #[serde(default)]
 pub struct EngineOverride {
     pub bin: Option<PathBuf>,
+    pub model: Option<String>,
+}
+
+impl EngineOverride {
+    fn is_empty(&self) -> bool {
+        self.bin.is_none() && self.model.is_none()
+    }
 }
 
 impl Default for Config {
@@ -44,6 +51,20 @@ impl Config {
         self.engines
             .get(engine_name)
             .and_then(|entry| entry.bin.as_deref())
+    }
+
+    pub fn model_override(&self, engine_name: &str) -> Option<&str> {
+        self.engines
+            .get(engine_name)
+            .and_then(|entry| entry.model.as_deref())
+    }
+
+    pub fn set_model_override(&mut self, engine_name: &str, model: Option<String>) {
+        let entry = self.engines.entry(engine_name.to_string()).or_default();
+        entry.model = model;
+        if entry.is_empty() {
+            self.engines.remove(engine_name);
+        }
     }
 }
 
@@ -150,6 +171,70 @@ mod tests {
     }
 
     #[test]
+    fn engine_model_override_round_trips() {
+        let text = "[engines.claude]\nmodel = \"sonnet\"";
+        let config = parse_config(text).unwrap();
+        assert_eq!(config.model_override("claude"), Some("sonnet"));
+        assert_eq!(config.model_override("codex"), None);
+    }
+
+    #[test]
+    fn set_model_override_adds_updates_and_removes_entries() {
+        struct Case {
+            name: &'static str,
+            initial: Option<&'static str>,
+            set: Option<&'static str>,
+            want: Option<&'static str>,
+            want_entry: bool,
+        }
+        let cases = [
+            Case {
+                name: "set on empty config",
+                initial: None,
+                set: Some("opus"),
+                want: Some("opus"),
+                want_entry: true,
+            },
+            Case {
+                name: "replace existing model",
+                initial: Some("sonnet"),
+                set: Some("haiku"),
+                want: Some("haiku"),
+                want_entry: true,
+            },
+            Case {
+                name: "clearing removes the empty entry",
+                initial: Some("sonnet"),
+                set: None,
+                want: None,
+                want_entry: false,
+            },
+        ];
+        for case in cases {
+            let mut config = Config::default();
+            if let Some(model) = case.initial {
+                config.set_model_override("claude", Some(model.to_string()));
+            }
+            config.set_model_override("claude", case.set.map(String::from));
+            assert_eq!(config.model_override("claude"), case.want, "{}", case.name);
+            assert_eq!(
+                config.engines.contains_key("claude"),
+                case.want_entry,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn clearing_the_model_keeps_a_bin_override_entry() {
+        let mut config = parse_config("[engines.claude]\nbin = \"/x\"\nmodel = \"opus\"").unwrap();
+        config.set_model_override("claude", None);
+        assert_eq!(config.model_override("claude"), None);
+        assert_eq!(config.bin_override("claude"), Some(Path::new("/x")));
+    }
+
+    #[test]
     fn config_serializes_and_parses_back_identically() {
         let config = Config {
             language: "fr".to_string(),
@@ -157,6 +242,7 @@ mod tests {
                 "claude".to_string(),
                 EngineOverride {
                     bin: Some(PathBuf::from("/tmp/fake")),
+                    model: Some("sonnet".to_string()),
                 },
             )]),
             ..Config::default()

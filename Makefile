@@ -1,44 +1,49 @@
-.PHONY: all build release run test check fmt fmt-check lint clean install doc hooks precommit ci
+.DEFAULT_GOAL := help
 
-all: build
+.PHONY: help all build release run test check fmt fmt-check lint clean install doc hooks precommit ci
 
-build:
+help: ## Show this help (default target)
+	@awk 'BEGIN {FS = ":.*## "; printf "\nfaro — make targets\n\n"} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2} END {print ""}' $(MAKEFILE_LIST)
+
+all: build ## Alias for build
+
+build: ## Compile the debug binary
 	cargo build
 
-release:
+release: ## Compile the optimized release binary
 	cargo build --release
 
-run:
+run: ## Launch the TUI (debug build)
 	cargo run
 
-test:
+test: ## Run the full test suite with all features
 	cargo test --all-features
 
-check:
+check: ## Type-check every target without building
 	cargo check --all-targets --all-features
 
-fmt:
+fmt: ## Format the whole workspace
 	cargo fmt --all
 
-fmt-check:
+fmt-check: ## Fail if any file is not formatted
 	cargo fmt --all -- --check
 
-lint:
+lint: ## Run clippy on every target, warnings are errors
 	cargo clippy --all-targets --all-features -- -D warnings
 
-clean:
+clean: ## Remove build artifacts
 	cargo clean
 
-install:
+install: ## Install the faro binary with cargo
 	cargo install --path .
 
-doc:
+doc: ## Build and open the API docs
 	cargo doc --no-deps --open
 
-hooks:
+hooks: ## Install pre-commit, commit-msg and pre-push hooks
 	pre-commit install --install-hooks -t pre-commit -t commit-msg -t pre-push
 
-precommit:
+precommit: ## Run every pre-commit hook against all files
 	pre-commit run --all-files
 
-ci: fmt-check lint test release
+ci: fmt-check lint test release ## Exactly what CI runs

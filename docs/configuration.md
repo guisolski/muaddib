@@ -23,6 +23,7 @@ engine_timeout_secs = 180   # per engine call
 
 [engines.claude]            # optional, one block per engine
 bin = "/custom/path/claude" # binary override (also used by the test suite)
+model = "sonnet"            # model passed to the CLI; any value the CLI accepts
 ```
 
 Unknown keys are tolerated (forward compatibility). Out-of-range numbers are
@@ -36,10 +37,11 @@ CLI flags > config file > defaults:
 |---|---|---|---|
 | answer language | `--lang` | `language` | `pt-BR` |
 | engine | `--engine` | `engine` | `claude` |
+| model | `--model` | `[engines.<name>] model` | engine default |
 | search mode | `--mode` | — | `general` |
 
-The config modal (F2) edits and persists the file; `--lang`/`--engine` apply to
-the current run only.
+The config modal (`Ctrl+O`) edits and persists the file; `--lang`/`--engine`/
+`--model` apply to the current run only.
 
 ## The config modal
 
@@ -47,6 +49,7 @@ the current run only.
 |---|---|
 | language | cycles `en`, `pt-BR`, `es`, `fr`, `de`, `it`, `ja`, `zh` (any BCP-47 tag works via `--lang` or the file) |
 | engine | cycles installed engines; uninstalled ones are shown but not selectable |
+| model | cycles `default` plus a curated list per engine; a custom model set in the file appears as an extra option |
 | validate links | on / off |
 | max parallel | 1–8 |
 

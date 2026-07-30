@@ -1,4 +1,4 @@
-use crate::tui::app::{App, CONFIG_FIELDS, ConfigField, ConfigForm, LANGUAGES};
+use crate::tui::app::{App, CONFIG_FIELDS, ConfigField, ConfigForm, LANGUAGES, model_choices};
 use crate::tui::theme;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
 const MODAL_WIDTH: u16 = 50;
-const MODAL_HEIGHT: u16 = 10;
+const MODAL_HEIGHT: u16 = 11;
 
 pub fn draw(frame: &mut Frame, app: &App, form: &ConfigForm) {
     let area = centered_rect(frame.area(), MODAL_WIDTH, MODAL_HEIGHT);
@@ -57,6 +57,7 @@ fn field_label(field: ConfigField) -> &'static str {
     match field {
         ConfigField::Language => "language",
         ConfigField::Engine => "engine",
+        ConfigField::Model => "model",
         ConfigField::ValidateLinks => "validate links",
         ConfigField::MaxParallel => "max parallel",
     }
@@ -66,6 +67,7 @@ fn field_value(app: &App, form: &ConfigForm, field: ConfigField) -> String {
     match field {
         ConfigField::Language => LANGUAGES[form.language_idx % LANGUAGES.len()].to_string(),
         ConfigField::Engine => engine_value(app, form),
+        ConfigField::Model => model_value(app, form),
         ConfigField::ValidateLinks => {
             if form.validate_links {
                 "on".to_string()
@@ -75,6 +77,16 @@ fn field_value(app: &App, form: &ConfigForm, field: ConfigField) -> String {
         }
         ConfigField::MaxParallel => form.max_parallel.to_string(),
     }
+}
+
+fn model_value(app: &App, form: &ConfigForm) -> String {
+    app.statuses.get(form.engine_idx).map_or_else(
+        || "default".to_string(),
+        |status| {
+            let choices = model_choices(&app.config, status.spec);
+            choices[form.model_idx % choices.len()].clone()
+        },
+    )
 }
 
 fn engine_value(app: &App, form: &ConfigForm) -> String {

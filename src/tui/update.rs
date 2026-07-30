@@ -1,6 +1,9 @@
 use crate::core::mode::MODES;
 use crate::pipeline::SearchEvent;
-use crate::tui::app::{App, ConfigField, ConfigForm, LANGUAGES, Overlay, Screen, SubQueryState};
+use crate::tui::app::{
+    App, ConfigField, ConfigForm, LANGUAGES, Overlay, Screen, SubQueryState, configured_model_idx,
+    model_choices,
+};
 use crate::tui::event::{AppEvent, Command};
 use crate::tui::keymap::{Action, Scope, resolve};
 use crossterm::event::KeyEvent;
@@ -132,7 +135,7 @@ fn go_back(app: &mut App) -> Option<Command> {
     }
     match app.screen {
         Screen::Home => {
-            app.input.reset();
+            back_from_home(app);
             None
         }
         Screen::Searching => {
@@ -144,6 +147,14 @@ fn go_back(app: &mut App) -> Option<Command> {
             app.screen = Screen::Home;
             None
         }
+    }
+}
+
+fn back_from_home(app: &mut App) {
+    if app.answer.is_some() {
+        app.screen = Screen::Results;
+    } else {
+        app.input.reset();
     }
 }
 
@@ -181,15 +192,40 @@ fn open_selected_source(app: &App) -> Option<Command> {
     Some(Command::OpenUrl(source.url.clone()))
 }
 
+struct FormContext {
+    statuses_len: usize,
+    available: Vec<usize>,
+    model_counts: Vec<usize>,
+    configured_model_idxs: Vec<usize>,
+}
+
+impl FormContext {
+    fn from_app(app: &App) -> Self {
+        Self {
+            statuses_len: app.statuses.len(),
+            available: app
+                .statuses
+                .iter()
+                .enumerate()
+                .filter(|(_, status)| status.available)
+                .map(|(index, _)| index)
+                .collect(),
+            model_counts: app
+                .statuses
+                .iter()
+                .map(|status| model_choices(&app.config, status.spec).len())
+                .collect(),
+            configured_model_idxs: app
+                .statuses
+                .iter()
+                .map(|status| configured_model_idx(&app.config, status.spec))
+                .collect(),
+        }
+    }
+}
+
 fn edit_config_form(app: &mut App, action: Action) {
-    let statuses_len = app.statuses.len();
-    let available: Vec<usize> = app
-        .statuses
-        .iter()
-        .enumerate()
-        .filter(|(_, status)| status.available)
-        .map(|(index, _)| index)
-        .collect();
+    let context = FormContext::from_app(app);
     let Some(Overlay::Config(form)) = app.overlay.as_mut() else {
         return;
     };
@@ -201,19 +237,37 @@ fn edit_config_form(app: &mut App, action: Action) {
             let len = super::app::CONFIG_FIELDS.len();
             form.field_idx = (form.field_idx + len - 1) % len;
         }
-        Action::ValueNext => step_config_value(form, 1, statuses_len, &available),
-        Action::ValuePrev => step_config_value(form, -1, statuses_len, &available),
+        Action::ValueNext => step_config_value(form, 1, &context),
+        Action::ValuePrev => step_config_value(form, -1, &context),
         _ => {}
     }
 }
 
-fn step_config_value(form: &mut ConfigForm, step: i8, statuses_len: usize, available: &[usize]) {
+fn step_config_value(form: &mut ConfigForm, step: i8, context: &FormContext) {
     match form.field() {
         ConfigField::Language => {
             form.language_idx = cycle(form.language_idx, LANGUAGES.len(), step);
         }
         ConfigField::Engine => {
-            form.engine_idx = next_available_engine(form.engine_idx, statuses_len, available, step);
+            form.engine_idx = next_available_engine(
+                form.engine_idx,
+                context.statuses_len,
+                &context.available,
+                step,
+            );
+            form.model_idx = context
+                .configured_model_idxs
+                .get(form.engine_idx)
+                .copied()
+                .unwrap_or(0);
+        }
+        ConfigField::Model => {
+            let count = context
+                .model_counts
+                .get(form.engine_idx)
+                .copied()
+                .unwrap_or(1);
+            form.model_idx = cycle(form.model_idx, count, step);
         }
         ConfigField::ValidateLinks => form.validate_links = !form.validate_links,
         ConfigField::MaxParallel => {
@@ -336,6 +390,10 @@ mod tests {
 
     fn key(code: KeyCode) -> AppEvent {
         AppEvent::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn ctrl(letter: char) -> AppEvent {
+        AppEvent::Key(KeyEvent::new(KeyCode::Char(letter), KeyModifiers::CONTROL))
     }
 
     fn sample_plan() -> SearchPlan {
@@ -477,12 +535,33 @@ mod tests {
     }
 
     #[test]
-    fn f1_toggles_help_and_escape_closes_it() {
+    fn ctrl_g_toggles_help_and_escape_closes_it() {
         let mut app = app();
-        update(&mut app, key(KeyCode::F(1)));
+        update(&mut app, ctrl('g'));
         assert_eq!(app.overlay, Some(Overlay::Help));
         update(&mut app, key(KeyCode::Esc));
         assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn refine_search_can_return_to_the_previous_results() {
+        let mut app = app();
+        app.answer = Some(sample_answer());
+        app.screen = Screen::Results;
+        update(&mut app, key(KeyCode::Char('/')));
+        assert_eq!(app.screen, Screen::Home);
+        update(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.screen, Screen::Results);
+        assert!(app.answer.is_some());
+    }
+
+    #[test]
+    fn escape_on_home_without_results_clears_the_input() {
+        let mut app = app();
+        update(&mut app, key(KeyCode::Char('x')));
+        update(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.screen, Screen::Home);
+        assert_eq!(app.input.value(), "");
     }
 
     #[test]
@@ -508,9 +587,10 @@ mod tests {
     #[test]
     fn config_modal_edits_and_saves_settings() {
         let mut app = app();
-        update(&mut app, key(KeyCode::F(2)));
+        update(&mut app, ctrl('o'));
         assert!(matches!(app.overlay, Some(Overlay::Config(_))));
         update(&mut app, key(KeyCode::Right));
+        update(&mut app, key(KeyCode::Down));
         update(&mut app, key(KeyCode::Down));
         update(&mut app, key(KeyCode::Down));
         update(&mut app, key(KeyCode::Right));
@@ -519,6 +599,42 @@ mod tests {
         assert_eq!(app.overlay, None);
         assert_eq!(app.config.language, "es");
         assert!(!app.config.validate_links);
+    }
+
+    #[test]
+    fn config_modal_saves_a_model_override_for_the_selected_engine() {
+        let mut app = app();
+        update(&mut app, ctrl('o'));
+        update(&mut app, key(KeyCode::Down));
+        update(&mut app, key(KeyCode::Down));
+        update(&mut app, key(KeyCode::Right));
+        update(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.config.model_override("claude"), Some("opus"));
+        update(&mut app, ctrl('o'));
+        update(&mut app, key(KeyCode::Down));
+        update(&mut app, key(KeyCode::Down));
+        update(&mut app, key(KeyCode::Left));
+        update(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.config.model_override("claude"), None);
+    }
+
+    #[test]
+    fn cycling_the_engine_resets_the_model_to_that_engines_configured_one() {
+        let mut app = app();
+        app.config
+            .set_model_override("claude", Some("sonnet".to_string()));
+        update(&mut app, ctrl('o'));
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay open");
+        };
+        assert_eq!(form.model_idx, 2);
+        update(&mut app, key(KeyCode::Down));
+        update(&mut app, key(KeyCode::Right));
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay open");
+        };
+        assert_eq!(form.engine_idx, 1);
+        assert_eq!(form.model_idx, 0);
     }
 
     #[test]

@@ -57,7 +57,7 @@ logic needs to be touched:
 | `MODES` | `core/mode.rs` | search modes, breadth, prompt instructions |
 | `ENGINES` | `engines/mod.rs` | engine binaries, argv, parse strategy |
 | `EXTRACTORS` | `core/extract.rs` | JSON extraction strategies, tried in order |
-| `KEYMAP` | `tui/keymap.rs` | keybindings, and the F1 help screen |
+| `KEYMAP` | `tui/keymap.rs` | keybindings, and the Ctrl+G help screen |
 | `CONFIG_FIELDS` | `tui/app.rs` | config modal fields |
 | `FRAMES` | `tui/widgets/spinner.rs` | spinner animation |
 | `GENERIC_TEXT_KEYS` | `engines/parse.rs` | envelope key probing |
