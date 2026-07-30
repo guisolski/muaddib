@@ -17,27 +17,37 @@ pub enum Block {
         #[serde(default = "default_heading_level")]
         level: u8,
         text: String,
+        #[serde(default)]
+        emphasis: Emphasis,
     },
     Paragraph {
         text: String,
         #[serde(default)]
         source_ids: Vec<u32>,
+        #[serde(default)]
+        emphasis: Emphasis,
     },
     List {
         #[serde(default)]
         ordered: bool,
         items: Vec<ListItem>,
+        #[serde(default)]
+        emphasis: Emphasis,
     },
     Quote {
         text: String,
         #[serde(default)]
         source_ids: Vec<u32>,
+        #[serde(default)]
+        emphasis: Emphasis,
     },
     Table {
         headers: Vec<String>,
         rows: Vec<Vec<String>>,
         #[serde(default)]
         source_ids: Vec<u32>,
+        #[serde(default)]
+        emphasis: Emphasis,
     },
     Chart {
         #[serde(default)]
@@ -49,9 +59,29 @@ pub enum Block {
         unit: String,
         #[serde(default)]
         source_ids: Vec<u32>,
+        #[serde(default)]
+        emphasis: Emphasis,
     },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", from = "String")]
+pub enum Emphasis {
+    #[default]
+    None,
+    Highlight,
+}
+
+impl From<String> for Emphasis {
+    fn from(raw: String) -> Self {
+        if raw.eq_ignore_ascii_case("highlight") {
+            Self::Highlight
+        } else {
+            Self::None
+        }
+    }
 }
 
 fn default_heading_level() -> u8 {
@@ -110,6 +140,7 @@ pub const ANSWER_SCHEMA: &str = r##"{
   },
   "definitions": {
     "source_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+    "emphasis": {"enum": ["none", "highlight"]},
     "source": {
       "type": "object",
       "required": ["id", "title", "url"],
@@ -128,7 +159,8 @@ pub const ANSWER_SCHEMA: &str = r##"{
           "properties": {
             "type": {"const": "heading"},
             "level": {"type": "integer", "minimum": 1, "maximum": 3},
-            "text": {"type": "string"}
+            "text": {"type": "string"},
+            "emphasis": {"$ref": "#/definitions/emphasis"}
           }
         },
         {
@@ -137,7 +169,8 @@ pub const ANSWER_SCHEMA: &str = r##"{
           "properties": {
             "type": {"const": "paragraph"},
             "text": {"type": "string"},
-            "source_ids": {"$ref": "#/definitions/source_ids"}
+            "source_ids": {"$ref": "#/definitions/source_ids"},
+            "emphasis": {"$ref": "#/definitions/emphasis"}
           }
         },
         {
@@ -156,7 +189,8 @@ pub const ANSWER_SCHEMA: &str = r##"{
                   "source_ids": {"$ref": "#/definitions/source_ids"}
                 }
               }
-            }
+            },
+            "emphasis": {"$ref": "#/definitions/emphasis"}
           }
         },
         {
@@ -165,7 +199,8 @@ pub const ANSWER_SCHEMA: &str = r##"{
           "properties": {
             "type": {"const": "quote"},
             "text": {"type": "string"},
-            "source_ids": {"$ref": "#/definitions/source_ids"}
+            "source_ids": {"$ref": "#/definitions/source_ids"},
+            "emphasis": {"$ref": "#/definitions/emphasis"}
           }
         },
         {
@@ -175,7 +210,8 @@ pub const ANSWER_SCHEMA: &str = r##"{
             "type": {"const": "table"},
             "headers": {"type": "array", "items": {"type": "string"}},
             "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}},
-            "source_ids": {"$ref": "#/definitions/source_ids"}
+            "source_ids": {"$ref": "#/definitions/source_ids"},
+            "emphasis": {"$ref": "#/definitions/emphasis"}
           }
         },
         {
@@ -188,7 +224,8 @@ pub const ANSWER_SCHEMA: &str = r##"{
             "unit": {"type": "string"},
             "labels": {"type": "array", "items": {"type": "string"}},
             "values": {"type": "array", "items": {"type": "number"}},
-            "source_ids": {"$ref": "#/definitions/source_ids"}
+            "source_ids": {"$ref": "#/definitions/source_ids"},
+            "emphasis": {"$ref": "#/definitions/emphasis"}
           }
         }
       ]
@@ -209,10 +246,12 @@ mod tests {
                 Block::Heading {
                     level: 2,
                     text: "Intro".to_string(),
+                    emphasis: Emphasis::None,
                 },
                 Block::Paragraph {
                     text: "A cited claim.".to_string(),
                     source_ids: vec![1],
+                    emphasis: Emphasis::Highlight,
                 },
                 Block::Chart {
                     chart_type: ChartType::Bar,
@@ -221,6 +260,7 @@ mod tests {
                     values: vec![40.0, 60.0],
                     unit: "%".to_string(),
                     source_ids: vec![1],
+                    emphasis: Emphasis::None,
                 },
             ],
             sources: vec![Source {
@@ -257,6 +297,7 @@ mod tests {
             Block::Paragraph {
                 text: "kept".to_string(),
                 source_ids: vec![1],
+                emphasis: Emphasis::None,
             }
         );
     }
@@ -275,6 +316,7 @@ mod tests {
                 want: Block::Paragraph {
                     text: "t".to_string(),
                     source_ids: vec![],
+                    emphasis: Emphasis::None,
                 },
             },
             Case {
@@ -283,6 +325,7 @@ mod tests {
                 want: Block::Heading {
                     level: 2,
                     text: "h".to_string(),
+                    emphasis: Emphasis::None,
                 },
             },
             Case {
@@ -301,12 +344,62 @@ mod tests {
                     values: vec![],
                     unit: String::new(),
                     source_ids: vec![],
+                    emphasis: Emphasis::None,
                 },
             },
         ];
         for case in cases {
             let block: Block = serde_json::from_value(case.input.clone()).unwrap();
             assert_eq!(block, case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn emphasis_defaults_to_none_and_tolerates_unknown_values() {
+        struct Case {
+            name: &'static str,
+            input: serde_json::Value,
+            want: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "absent emphasis defaults to none",
+                input: json!({"type": "paragraph", "text": "t"}),
+                want: "none",
+            },
+            Case {
+                name: "highlight is preserved",
+                input: json!({"type": "paragraph", "text": "t", "emphasis": "highlight"}),
+                want: "highlight",
+            },
+            Case {
+                name: "unknown emphasis degrades to none",
+                input: json!({"type": "paragraph", "text": "t", "emphasis": "sparkle"}),
+                want: "none",
+            },
+        ];
+        for case in cases {
+            let block: Block = serde_json::from_value(case.input.clone()).unwrap();
+            let back = serde_json::to_value(&block).unwrap();
+            assert_eq!(back["emphasis"], json!(case.want), "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn schema_declares_emphasis_on_every_block_variant() {
+        let schema: serde_json::Value = serde_json::from_str(ANSWER_SCHEMA).unwrap();
+        let variants = schema["definitions"]["block"]["oneOf"].as_array().unwrap();
+        for variant in variants {
+            let block_type = variant["properties"]["type"]["const"].as_str().unwrap();
+            assert!(
+                variant["properties"]["emphasis"].is_object(),
+                "{block_type}"
+            );
+            let required = variant["required"].as_array().unwrap();
+            assert!(
+                !required.iter().any(|entry| entry == "emphasis"),
+                "{block_type}"
+            );
         }
     }
 

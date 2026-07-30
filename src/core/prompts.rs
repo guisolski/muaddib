@@ -64,6 +64,8 @@ pub fn synthesis_prompt(plan: &SearchPlan, merged: &MergedFindings, inline_schem
          invent a URL.\n\
          - Number sources starting at 1.\n\
          - Add a chart block when the findings contain comparable numbers.\n\
+         - Optionally set emphasis to \"highlight\" on the single block that carries the key \
+         takeaway.\n\
          - Suggest up to 3 follow-up queries in the followups array.\n\
          {output_contract}",
         original = plan.original,
@@ -186,6 +188,13 @@ mod tests {
          invent a URL"
         ));
         assert!(prompt.contains("chart block"));
+    }
+
+    #[test]
+    fn synthesis_prompt_mentions_emphasis() {
+        let prompt = synthesis_prompt(&sample_plan(), &sample_merged(), false);
+        assert!(prompt.contains("emphasis"));
+        assert!(prompt.contains("\"highlight\""));
     }
 
     #[test]

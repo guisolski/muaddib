@@ -5,7 +5,7 @@ use crossterm::event::KeyEvent;
 pub enum AppEvent {
     Key(KeyEvent),
     Tick,
-    Resize,
+    Resize { width: u16, height: u16 },
     Search(SearchEvent),
 }
 

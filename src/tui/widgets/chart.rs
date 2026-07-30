@@ -2,7 +2,13 @@ const BAR_GLYPH: &str = "▇";
 const MIN_BAR_WIDTH: usize = 4;
 const MAX_LABEL_WIDTH: usize = 18;
 
-pub fn bar_chart_lines(labels: &[String], values: &[f64], unit: &str, width: u16) -> Vec<String> {
+pub fn bar_chart_lines(
+    labels: &[String],
+    values: &[f64],
+    unit: &str,
+    width: u16,
+    fraction: f64,
+) -> Vec<String> {
     let pairs: Vec<(&String, f64)> = labels
         .iter()
         .zip(values.iter().copied())
@@ -24,7 +30,17 @@ pub fn bar_chart_lines(labels: &[String], values: &[f64], unit: &str, width: u16
     let bar_width = usable_bar_width(width, label_width);
     pairs
         .iter()
-        .map(|(label, value)| chart_row(label, *value, unit, label_width, bar_width, max_magnitude))
+        .map(|(label, value)| {
+            chart_row(
+                label,
+                *value,
+                unit,
+                label_width,
+                bar_width,
+                max_magnitude,
+                fraction,
+            )
+        })
         .collect()
 }
 
@@ -42,9 +58,12 @@ fn chart_row(
     label_width: usize,
     bar_width: usize,
     max_magnitude: f64,
+    fraction: f64,
 ) -> String {
     let clipped: String = label.chars().take(label_width).collect();
-    let bar = BAR_GLYPH.repeat(bar_length(value, max_magnitude, bar_width));
+    let full_length = bar_length(value, max_magnitude, bar_width) as f64;
+    let shown = (full_length * fraction.clamp(0.0, 1.0)).round() as usize;
+    let bar = BAR_GLYPH.repeat(shown);
     let value_text = format_value(value, unit);
     format!("{clipped:>label_width$} {bar} {value_text}")
 }
@@ -79,8 +98,43 @@ mod tests {
     }
 
     #[test]
+    fn bars_grow_with_fraction() {
+        struct Case {
+            name: &'static str,
+            fraction: f64,
+            want_glyphs: usize,
+        }
+        let cases = [
+            Case {
+                name: "zero fraction draws no bar",
+                fraction: 0.0,
+                want_glyphs: 0,
+            },
+            Case {
+                name: "half fraction draws half the bar",
+                fraction: 0.5,
+                want_glyphs: 14,
+            },
+            Case {
+                name: "full fraction matches the settled bar",
+                fraction: 1.0,
+                want_glyphs: 27,
+            },
+        ];
+        for case in cases {
+            let lines = bar_chart_lines(&labels(&["a"]), &[10.0], "", 40, case.fraction);
+            assert_eq!(
+                lines[0].matches(BAR_GLYPH).count(),
+                case.want_glyphs,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
     fn bars_scale_relative_to_the_maximum_value() {
-        let lines = bar_chart_lines(&labels(&["a", "b"]), &[100.0, 50.0], "%", 60);
+        let lines = bar_chart_lines(&labels(&["a", "b"]), &[100.0, 50.0], "%", 60, 1.0);
         let bars: Vec<usize> = lines
             .iter()
             .map(|line| line.matches(BAR_GLYPH).count())
@@ -132,21 +186,21 @@ mod tests {
             },
         ];
         for case in cases {
-            let lines = bar_chart_lines(&case.labels, &case.values, "", 40);
+            let lines = bar_chart_lines(&case.labels, &case.values, "", 40, 1.0);
             assert_eq!(lines.len(), case.want_rows, "{}", case.name);
         }
     }
 
     #[test]
     fn tiny_widths_still_produce_output() {
-        let lines = bar_chart_lines(&labels(&["label"]), &[10.0], "%", 1);
+        let lines = bar_chart_lines(&labels(&["label"]), &[10.0], "%", 1, 1.0);
         assert_eq!(lines.len(), 1);
         assert!(lines[0].contains(BAR_GLYPH));
     }
 
     #[test]
     fn positive_values_always_show_at_least_one_block() {
-        let lines = bar_chart_lines(&labels(&["big", "tiny"]), &[1000.0, 1.0], "", 40);
+        let lines = bar_chart_lines(&labels(&["big", "tiny"]), &[1000.0, 1.0], "", 40, 1.0);
         assert!(lines[1].contains(BAR_GLYPH));
     }
 

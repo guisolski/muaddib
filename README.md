@@ -97,9 +97,11 @@ faro --print "rust 1.93 release highlights" > answer.json   # headless JSON
 | Everywhere | `Esc` | back / cancel search / close modal |
 | Home | `Enter` | search |
 | Home | `Tab` / `Shift+Tab` | cycle search mode |
-| Results | `j`/`k`/`↓`/`↑` | scroll |
+| Results | `j`/`k`/`↓`/`↑` | scroll, or move the selection in the focused pane |
 | Results | `PgDn`/`PgUp`/`g`/`G` | page / top / bottom |
-| Results | `Tab` | focus sources (then `Enter` opens the link) |
+| Results | `Tab` / `Shift+Tab` | cycle focus: body → sources → follow-ups |
+| Results | `Enter` | open the selected source, or run the selected follow-up as a new search |
+| Results | `1`-`9` | jump to source N |
 | Results | `n` | new search |
 | Results | `/` | refine current search |
 | Results | `q` | quit |
@@ -151,6 +153,7 @@ engine = "claude"           # claude | cursor-agent | codex | opencode
 max_parallel = 4            # concurrent sub-searches (1-8)
 expansion_breadth = 0       # 0 = use the mode default
 validate_links = true       # HTTP HEAD check on every source
+animations = true           # staggered reveal, chart growth, pulses
 engine_timeout_secs = 180
 
 [engines.claude]            # optional per-engine overrides

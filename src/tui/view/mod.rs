@@ -1,4 +1,5 @@
 pub mod config_modal;
+pub mod doc;
 pub mod help;
 pub mod home;
 pub mod results;

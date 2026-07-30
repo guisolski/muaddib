@@ -11,10 +11,38 @@ use tui_input::Input;
 pub const LANGUAGES: &[&str] = &["en", "pt-BR", "es", "fr", "de", "it", "ja", "zh"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Viewport {
+    pub width: u16,
+    pub height: u16,
+}
+
+impl Default for Viewport {
+    fn default() -> Self {
+        Self {
+            width: 80,
+            height: 24,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
     Home,
     Searching,
     Results,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Body,
+    Sources(usize),
+    Followups(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Pulse {
+    pub source: usize,
+    pub started: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,9 +167,11 @@ pub struct App {
     pub synthesizing: bool,
     pub answer: Option<Answer>,
     pub links: HashMap<u32, LinkStatus>,
+    pub viewport: Viewport,
     pub scroll: u16,
-    pub sources_focused: bool,
-    pub selected_source: usize,
+    pub focus: Focus,
+    pub reveal_started: Option<u64>,
+    pub pulse: Option<Pulse>,
     pub tick: u64,
     pub notice: Option<String>,
     pub search: Option<SearchHandle>,
@@ -165,9 +195,11 @@ impl App {
             synthesizing: false,
             answer: None,
             links: HashMap::new(),
+            viewport: Viewport::default(),
             scroll: 0,
-            sources_focused: false,
-            selected_source: 0,
+            focus: Focus::Body,
+            reveal_started: None,
+            pulse: None,
             tick: 0,
             notice: None,
             search: None,
@@ -187,8 +219,9 @@ impl App {
         self.answer = None;
         self.links.clear();
         self.scroll = 0;
-        self.sources_focused = false;
-        self.selected_source = 0;
+        self.focus = Focus::Body;
+        self.reveal_started = None;
+        self.pulse = None;
         self.notice = None;
         self.started_at = Some(Instant::now());
     }
@@ -208,6 +241,12 @@ impl App {
         self.answer
             .as_ref()
             .map_or(0, |answer| answer.sources.len())
+    }
+
+    pub fn followup_count(&self) -> usize {
+        self.answer
+            .as_ref()
+            .map_or(0, |answer| answer.followups.len())
     }
 }
 

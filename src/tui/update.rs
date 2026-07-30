@@ -1,11 +1,12 @@
 use crate::core::mode::MODES;
 use crate::pipeline::SearchEvent;
 use crate::tui::app::{
-    App, ConfigField, ConfigForm, LANGUAGES, Overlay, Screen, SubQueryState, configured_model_idx,
-    model_choices,
+    App, ConfigField, ConfigForm, Focus, LANGUAGES, Overlay, Pulse, Screen, SubQueryState,
+    Viewport, configured_model_idx, model_choices,
 };
 use crate::tui::event::{AppEvent, Command};
 use crate::tui::keymap::{Action, Scope, resolve};
+use crate::tui::view::doc::{self, DocAnim, DocSelection};
 use crossterm::event::KeyEvent;
 
 const PAGE_JUMP: u16 = 10;
@@ -16,7 +17,11 @@ pub fn update(app: &mut App, event: AppEvent) -> Option<Command> {
             app.tick = app.tick.wrapping_add(1);
             None
         }
-        AppEvent::Resize => None,
+        AppEvent::Resize { width, height } => {
+            app.viewport = Viewport { width, height };
+            clamp_scroll(app);
+            None
+        }
         AppEvent::Search(search_event) => apply_search_event(app, search_event),
         AppEvent::Key(key) => handle_key(app, &key),
     }
@@ -82,7 +87,7 @@ fn perform(app: &mut App, action: Action) -> Option<Command> {
             None
         }
         Action::PageDown => {
-            app.scroll = app.scroll.saturating_add(PAGE_JUMP);
+            app.scroll = app.scroll.saturating_add(PAGE_JUMP).min(max_scroll(app));
             None
         }
         Action::PageUp => {
@@ -94,15 +99,22 @@ fn perform(app: &mut App, action: Action) -> Option<Command> {
             None
         }
         Action::ScrollBottom => {
-            app.scroll = u16::MAX;
+            app.scroll = max_scroll(app);
             None
         }
-        Action::FocusSources => {
-            app.sources_focused = !app.sources_focused;
-            app.selected_source = 0;
+        Action::FocusNext => {
+            cycle_focus(app, true);
             None
         }
-        Action::OpenSelected => open_selected_source(app),
+        Action::FocusPrev => {
+            cycle_focus(app, false);
+            None
+        }
+        Action::Activate => activate(app),
+        Action::JumpToSource(number) => {
+            jump_to_source(app, number);
+            None
+        }
         Action::NewSearch => {
             app.screen = Screen::Home;
             app.input.reset();
@@ -167,29 +179,120 @@ fn submit_query(app: &mut App) -> Option<Command> {
 }
 
 fn move_down(app: &mut App) {
-    if app.sources_focused {
-        let last = app.source_count().saturating_sub(1);
-        app.selected_source = (app.selected_source + 1).min(last);
-    } else {
-        app.scroll = app.scroll.saturating_add(1);
+    match app.focus {
+        Focus::Body => app.scroll = app.scroll.saturating_add(1).min(max_scroll(app)),
+        Focus::Sources(index) => {
+            let last = app.source_count().saturating_sub(1);
+            app.focus = Focus::Sources((index + 1).min(last));
+            ensure_selection_visible(app);
+        }
+        Focus::Followups(index) => {
+            let last = app.followup_count().saturating_sub(1);
+            app.focus = Focus::Followups((index + 1).min(last));
+            ensure_selection_visible(app);
+        }
     }
+}
+
+fn cycle_focus(app: &mut App, forward: bool) {
+    let current = match app.focus {
+        Focus::Body => 0,
+        Focus::Sources(_) => 1,
+        Focus::Followups(_) => 2,
+    };
+    let populated = [true, app.source_count() > 0, app.followup_count() > 0];
+    let mut position = current;
+    for _ in 0..populated.len() {
+        position = if forward {
+            (position + 1) % populated.len()
+        } else {
+            (position + populated.len() - 1) % populated.len()
+        };
+        if populated[position] {
+            break;
+        }
+    }
+    app.focus = match position {
+        1 => Focus::Sources(0),
+        2 => Focus::Followups(0),
+        _ => Focus::Body,
+    };
+    ensure_selection_visible(app);
+}
+
+fn activate(app: &mut App) -> Option<Command> {
+    let answer = app.answer.as_ref()?;
+    match app.focus {
+        Focus::Body => None,
+        Focus::Sources(index) => answer
+            .sources
+            .get(index)
+            .map(|source| Command::OpenUrl(source.url.clone())),
+        Focus::Followups(index) => {
+            let query = answer.followups.get(index)?.clone();
+            app.input = tui_input::Input::new(query.clone());
+            Some(Command::StartSearch { query })
+        }
+    }
+}
+
+fn jump_to_source(app: &mut App, number: u8) {
+    let index = usize::from(number).saturating_sub(1);
+    if index < app.source_count() {
+        app.focus = Focus::Sources(index);
+        app.pulse = Some(Pulse {
+            source: index,
+            started: app.tick,
+        });
+        ensure_selection_visible(app);
+    }
+}
+
+fn ensure_selection_visible(app: &mut App) {
+    let Some(answer) = &app.answer else {
+        return;
+    };
+    let width = doc::content_width(app.viewport.width);
+    let settled = DocAnim::settled(answer.blocks.len());
+    let rendered = doc::render_doc(answer, width, &app.links, DocSelection::None, &settled);
+    let range = match app.focus {
+        Focus::Body => None,
+        Focus::Sources(index) => rendered.source_ranges.get(index).copied(),
+        Focus::Followups(index) => rendered.followup_ranges.get(index).copied(),
+    };
+    if let Some(range) = range {
+        app.scroll =
+            doc::scroll_into_view(app.scroll, range, doc::content_height(app.viewport.height));
+    }
+}
+
+fn max_scroll(app: &App) -> u16 {
+    let Some(answer) = &app.answer else {
+        return 0;
+    };
+    let width = doc::content_width(app.viewport.width);
+    let settled = DocAnim::settled(answer.blocks.len());
+    let rendered = doc::render_doc(answer, width, &app.links, DocSelection::None, &settled);
+    let total = u16::try_from(rendered.lines.len()).unwrap_or(u16::MAX);
+    total.saturating_sub(doc::content_height(app.viewport.height))
+}
+
+fn clamp_scroll(app: &mut App) {
+    app.scroll = app.scroll.min(max_scroll(app));
 }
 
 fn move_up(app: &mut App) {
-    if app.sources_focused {
-        app.selected_source = app.selected_source.saturating_sub(1);
-    } else {
-        app.scroll = app.scroll.saturating_sub(1);
+    match app.focus {
+        Focus::Body => app.scroll = app.scroll.saturating_sub(1),
+        Focus::Sources(index) => {
+            app.focus = Focus::Sources(index.saturating_sub(1));
+            ensure_selection_visible(app);
+        }
+        Focus::Followups(index) => {
+            app.focus = Focus::Followups(index.saturating_sub(1));
+            ensure_selection_visible(app);
+        }
     }
-}
-
-fn open_selected_source(app: &App) -> Option<Command> {
-    if !app.sources_focused {
-        return None;
-    }
-    let answer = app.answer.as_ref()?;
-    let source = answer.sources.get(app.selected_source)?;
-    Some(Command::OpenUrl(source.url.clone()))
 }
 
 struct FormContext {
@@ -338,8 +441,8 @@ fn apply_search_event(app: &mut App, event: SearchEvent) -> Option<Command> {
             app.answer = Some(*answer);
             app.screen = Screen::Results;
             app.scroll = 0;
-            app.sources_focused = false;
-            app.selected_source = 0;
+            app.focus = Focus::Body;
+            app.reveal_started = Some(app.tick);
             app.synthesizing = false;
         }
         SearchEvent::LinkChecked { source_id, status } => {
@@ -364,11 +467,12 @@ fn set_progress(app: &mut App, idx: usize, state: SubQueryState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::answer::{Answer, Source};
+    use crate::core::answer::{Answer, Block, Emphasis, Source};
     use crate::core::config::Config;
     use crate::core::mode::Mode;
     use crate::core::plan::{SearchPlan, SubQuery};
     use crate::engines::{ENGINES, EngineStatus};
+    use crate::tui::app::Pulse;
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::path::PathBuf;
 
@@ -435,6 +539,298 @@ mod tests {
             ],
             ..Answer::default()
         }
+    }
+
+    fn scroll_answer() -> Answer {
+        Answer {
+            blocks: vec![Block::Paragraph {
+                text: "body".to_string(),
+                source_ids: Vec::new(),
+                emphasis: Emphasis::None,
+            }],
+            ..sample_answer()
+        }
+    }
+
+    fn results_app(answer: Answer, height: u16) -> App {
+        let mut app = app();
+        app.answer = Some(answer);
+        app.screen = Screen::Results;
+        app.viewport = Viewport { width: 40, height };
+        app
+    }
+
+    #[test]
+    fn scroll_actions_clamp_to_document_end() {
+        struct Case {
+            name: &'static str,
+            key: KeyCode,
+            mods: KeyModifiers,
+            presses: usize,
+            start: u16,
+            want: u16,
+        }
+        let cases = [
+            Case {
+                name: "j stops at the last scrollable line",
+                key: KeyCode::Char('j'),
+                mods: KeyModifiers::NONE,
+                presses: 10,
+                start: 0,
+                want: 3,
+            },
+            Case {
+                name: "shift g lands exactly on the maximum",
+                key: KeyCode::Char('G'),
+                mods: KeyModifiers::SHIFT,
+                presses: 1,
+                start: 0,
+                want: 3,
+            },
+            Case {
+                name: "page down clamps to the maximum",
+                key: KeyCode::PageDown,
+                mods: KeyModifiers::NONE,
+                presses: 1,
+                start: 0,
+                want: 3,
+            },
+            Case {
+                name: "g returns to the top",
+                key: KeyCode::Char('g'),
+                mods: KeyModifiers::NONE,
+                presses: 1,
+                start: 3,
+                want: 0,
+            },
+        ];
+        for case in cases {
+            let mut app = results_app(scroll_answer(), 5);
+            app.scroll = case.start;
+            for _ in 0..case.presses {
+                update(&mut app, AppEvent::Key(KeyEvent::new(case.key, case.mods)));
+            }
+            assert_eq!(app.scroll, case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn resize_updates_viewport_and_reclamps_scroll() {
+        struct Case {
+            name: &'static str,
+            start_height: u16,
+            start_scroll: u16,
+            new_height: u16,
+            want_scroll: u16,
+        }
+        let cases = [
+            Case {
+                name: "shrinking keeps a valid scroll",
+                start_height: 6,
+                start_scroll: 2,
+                new_height: 5,
+                want_scroll: 2,
+            },
+            Case {
+                name: "growing clamps scroll to the new maximum",
+                start_height: 5,
+                start_scroll: 3,
+                new_height: 6,
+                want_scroll: 2,
+            },
+        ];
+        for case in cases {
+            let mut app = results_app(scroll_answer(), case.start_height);
+            app.scroll = case.start_scroll;
+            update(
+                &mut app,
+                AppEvent::Resize {
+                    width: 40,
+                    height: case.new_height,
+                },
+            );
+            assert_eq!(
+                app.viewport,
+                Viewport {
+                    width: 40,
+                    height: case.new_height,
+                },
+                "{}",
+                case.name
+            );
+            assert_eq!(app.scroll, case.want_scroll, "{}", case.name);
+        }
+    }
+
+    fn interactive_answer() -> Answer {
+        Answer {
+            followups: vec!["next".to_string()],
+            ..sample_answer()
+        }
+    }
+
+    #[test]
+    fn tab_cycles_focus_through_body_sources_and_followups() {
+        struct Case {
+            name: &'static str,
+            answer: Answer,
+            forward: bool,
+            want: Vec<Focus>,
+        }
+        let cases = [
+            Case {
+                name: "full answer cycles all three panes",
+                answer: interactive_answer(),
+                forward: true,
+                want: vec![Focus::Sources(0), Focus::Followups(0), Focus::Body],
+            },
+            Case {
+                name: "no followups skips back to body",
+                answer: sample_answer(),
+                forward: true,
+                want: vec![Focus::Sources(0), Focus::Body],
+            },
+            Case {
+                name: "no sources skips to followups",
+                answer: Answer {
+                    sources: Vec::new(),
+                    ..interactive_answer()
+                },
+                forward: true,
+                want: vec![Focus::Followups(0), Focus::Body],
+            },
+            Case {
+                name: "backtab reverses the cycle",
+                answer: interactive_answer(),
+                forward: false,
+                want: vec![Focus::Followups(0), Focus::Sources(0), Focus::Body],
+            },
+        ];
+        for case in cases {
+            let mut app = results_app(case.answer, 24);
+            for (step, want) in case.want.iter().enumerate() {
+                let event = if case.forward {
+                    key(KeyCode::Tab)
+                } else {
+                    AppEvent::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT))
+                };
+                update(&mut app, event);
+                assert_eq!(app.focus, *want, "{} step {step}", case.name);
+            }
+        }
+    }
+
+    #[test]
+    fn jk_moves_selection_within_pane_and_scrolls_it_into_view() {
+        let mut app = results_app(interactive_answer(), 5);
+        update(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Sources(0));
+        assert_eq!(app.scroll, 0);
+        update(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.focus, Focus::Sources(1));
+        assert_eq!(app.scroll, 1);
+        update(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.focus, Focus::Followups(0));
+        assert_eq!(app.scroll, 3);
+    }
+
+    #[test]
+    fn enter_activates_selection_per_focus() {
+        struct Case {
+            name: &'static str,
+            focus: Focus,
+            want: Option<Command>,
+            want_input: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                name: "body enter does nothing",
+                focus: Focus::Body,
+                want: None,
+                want_input: None,
+            },
+            Case {
+                name: "sources enter opens the selected url",
+                focus: Focus::Sources(1),
+                want: Some(Command::OpenUrl("https://two.example".to_string())),
+                want_input: None,
+            },
+            Case {
+                name: "followups enter runs it as a new search",
+                focus: Focus::Followups(0),
+                want: Some(Command::StartSearch {
+                    query: "next".to_string(),
+                }),
+                want_input: Some("next"),
+            },
+        ];
+        for case in cases {
+            let mut app = results_app(interactive_answer(), 24);
+            app.focus = case.focus;
+            let command = update(&mut app, key(KeyCode::Enter));
+            assert_eq!(command, case.want, "{}", case.name);
+            if let Some(want_input) = case.want_input {
+                assert_eq!(app.input.value(), want_input, "{}", case.name);
+            }
+        }
+    }
+
+    #[test]
+    fn digit_keys_jump_to_existing_sources_only() {
+        struct Case {
+            name: &'static str,
+            digit: char,
+            want_focus: Focus,
+            want_scroll: u16,
+        }
+        let cases = [
+            Case {
+                name: "digit two selects the second source and scrolls to it",
+                digit: '2',
+                want_focus: Focus::Sources(1),
+                want_scroll: 1,
+            },
+            Case {
+                name: "digit nine with two sources changes nothing",
+                digit: '9',
+                want_focus: Focus::Body,
+                want_scroll: 0,
+            },
+        ];
+        for case in cases {
+            let mut app = results_app(interactive_answer(), 5);
+            update(&mut app, key(KeyCode::Char(case.digit)));
+            assert_eq!(app.focus, case.want_focus, "{}", case.name);
+            assert_eq!(app.scroll, case.want_scroll, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn answer_ready_starts_reveal_and_digit_jump_starts_pulse() {
+        let mut app = app();
+        app.begin_search();
+        app.tick = 42;
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::AnswerReady(Box::new(interactive_answer()))),
+        );
+        assert_eq!(app.reveal_started, Some(42));
+        app.viewport = Viewport {
+            width: 40,
+            height: 24,
+        };
+        app.tick = 50;
+        update(&mut app, key(KeyCode::Char('2')));
+        assert_eq!(
+            app.pulse,
+            Some(Pulse {
+                source: 1,
+                started: 50,
+            })
+        );
+        app.begin_search();
+        assert_eq!(app.reveal_started, None);
+        assert_eq!(app.pulse, None);
     }
 
     #[test]
@@ -514,11 +910,13 @@ mod tests {
         assert_eq!(app.progress[0], SubQueryState::Done);
         update(&mut app, AppEvent::Search(SearchEvent::SynthesisStarted));
         assert!(app.synthesizing);
+        app.focus = Focus::Sources(1);
         update(
             &mut app,
             AppEvent::Search(SearchEvent::AnswerReady(Box::new(sample_answer()))),
         );
         assert_eq!(app.screen, Screen::Results);
+        assert_eq!(app.focus, Focus::Body);
         assert!(!app.synthesizing);
     }
 
@@ -566,17 +964,15 @@ mod tests {
 
     #[test]
     fn results_keys_scroll_and_open_sources() {
-        let mut app = app();
-        app.answer = Some(sample_answer());
-        app.screen = Screen::Results;
+        let mut app = results_app(sample_answer(), 4);
         update(&mut app, key(KeyCode::Char('j')));
         assert_eq!(app.scroll, 1);
         update(&mut app, key(KeyCode::Tab));
-        assert!(app.sources_focused);
+        assert_eq!(app.focus, Focus::Sources(0));
         update(&mut app, key(KeyCode::Char('j')));
-        assert_eq!(app.selected_source, 1);
+        assert_eq!(app.focus, Focus::Sources(1));
         update(&mut app, key(KeyCode::Char('j')));
-        assert_eq!(app.selected_source, 1);
+        assert_eq!(app.focus, Focus::Sources(1));
         let command = update(&mut app, key(KeyCode::Enter));
         assert_eq!(
             command,

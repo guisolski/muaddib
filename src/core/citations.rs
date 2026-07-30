@@ -205,7 +205,7 @@ fn block_source_id_slots_mut(blocks: &mut [Block]) -> Vec<&mut Vec<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::answer::ListItem;
+    use crate::core::answer::{Emphasis, ListItem};
 
     fn finding(claim: &str, url: &str) -> Finding {
         Finding {
@@ -379,10 +379,12 @@ mod tests {
                 Block::Paragraph {
                     text: "second source first".to_string(),
                     source_ids: vec![7, 3],
+                    emphasis: Emphasis::None,
                 },
                 Block::Paragraph {
                     text: "repeat and dangling".to_string(),
                     source_ids: vec![3, 99],
+                    emphasis: Emphasis::None,
                 },
             ],
             sources: vec![
@@ -403,6 +405,7 @@ mod tests {
             Block::Paragraph {
                 text: "second source first".to_string(),
                 source_ids: vec![1, 2],
+                emphasis: Emphasis::None,
             }
         );
         assert_eq!(
@@ -410,6 +413,7 @@ mod tests {
             Block::Paragraph {
                 text: "repeat and dangling".to_string(),
                 source_ids: vec![2],
+                emphasis: Emphasis::None,
             }
         );
         let urls: Vec<&str> = renumbered
@@ -428,6 +432,7 @@ mod tests {
             blocks: vec![Block::Paragraph {
                 text: "claims".to_string(),
                 source_ids: vec![1, 2],
+                emphasis: Emphasis::None,
             }],
             sources: vec![
                 source(1, "https://real.example/found"),
@@ -444,6 +449,7 @@ mod tests {
             Block::Paragraph {
                 text: "claims".to_string(),
                 source_ids: vec![1],
+                emphasis: Emphasis::None,
             }
         );
     }
@@ -463,6 +469,7 @@ mod tests {
                         source_ids: vec![9],
                     },
                 ],
+                emphasis: Emphasis::None,
             }],
             sources: vec![
                 source(4, "https://a.example"),

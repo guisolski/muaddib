@@ -1,3 +1,4 @@
+pub mod anim;
 pub mod app;
 pub mod event;
 pub mod keymap;
@@ -36,6 +37,12 @@ pub async fn run(
         start_search(&mut app, query);
     }
     let mut terminal = ratatui::init();
+    if let Ok(size) = terminal.size() {
+        app.viewport = app::Viewport {
+            width: size.width,
+            height: size.height,
+        };
+    }
     let result = event_loop(&mut terminal, &mut app).await;
     ratatui::restore();
     result
@@ -76,7 +83,7 @@ fn translate_terminal_event(
 ) -> Option<AppEvent> {
     match maybe_event? {
         Ok(Event::Key(key)) if key.kind == KeyEventKind::Press => Some(AppEvent::Key(key)),
-        Ok(Event::Resize(..)) => Some(AppEvent::Resize),
+        Ok(Event::Resize(width, height)) => Some(AppEvent::Resize { width, height }),
         _ => None,
     }
 }

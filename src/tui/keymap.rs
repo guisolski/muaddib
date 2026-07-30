@@ -24,8 +24,10 @@ pub enum Action {
     PageUp,
     ScrollTop,
     ScrollBottom,
-    FocusSources,
-    OpenSelected,
+    FocusNext,
+    FocusPrev,
+    Activate,
+    JumpToSource(u8),
     NewSearch,
     RefineSearch,
     FieldNext,
@@ -170,15 +172,29 @@ pub const KEYMAP: &[KeyBinding] = &[
         Scope::Results,
         KeyCode::Tab,
         KeyModifiers::NONE,
-        Action::FocusSources,
-        "focus sources",
+        Action::FocusNext,
+        "next pane",
+    ),
+    bind(
+        Scope::Results,
+        KeyCode::BackTab,
+        KeyModifiers::SHIFT,
+        Action::FocusPrev,
+        "previous pane",
     ),
     bind(
         Scope::Results,
         KeyCode::Enter,
         KeyModifiers::NONE,
-        Action::OpenSelected,
-        "open selected source",
+        Action::Activate,
+        "open source / run follow-up",
+    ),
+    bind(
+        Scope::Results,
+        KeyCode::Char('1'),
+        KeyModifiers::NONE,
+        Action::JumpToSource(1),
+        "jump to source 1-9",
     ),
     bind(
         Scope::Results,
@@ -240,8 +256,22 @@ pub const KEYMAP: &[KeyBinding] = &[
 
 pub fn resolve(scope: Scope, key: &KeyEvent) -> Option<Action> {
     binding_in(scope, key)
-        .or_else(|| binding_in(Scope::Global, key))
         .map(|binding| binding.action)
+        .or_else(|| digit_jump(scope, key))
+        .or_else(|| binding_in(Scope::Global, key).map(|binding| binding.action))
+}
+
+fn digit_jump(scope: Scope, key: &KeyEvent) -> Option<Action> {
+    if scope != Scope::Results || key.modifiers != KeyModifiers::NONE {
+        return None;
+    }
+    let KeyCode::Char(character) = key.code else {
+        return None;
+    };
+    let digit = u8::try_from(character.to_digit(10)?).ok()?;
+    (1..=9)
+        .contains(&digit)
+        .then_some(Action::JumpToSource(digit))
 }
 
 fn binding_in(scope: Scope, key: &KeyEvent) -> Option<&'static KeyBinding> {
@@ -315,10 +345,22 @@ mod tests {
                 want: Some(Action::Submit),
             },
             Case {
-                name: "enter opens source on results",
+                name: "enter activates the selection on results",
                 scope: Scope::Results,
                 key: KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-                want: Some(Action::OpenSelected),
+                want: Some(Action::Activate),
+            },
+            Case {
+                name: "tab cycles focus forward on results",
+                scope: Scope::Results,
+                key: KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE),
+                want: Some(Action::FocusNext),
+            },
+            Case {
+                name: "backtab cycles focus backward on results",
+                scope: Scope::Results,
+                key: KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT),
+                want: Some(Action::FocusPrev),
             },
             Case {
                 name: "escape falls back to global",
@@ -365,6 +407,52 @@ mod tests {
         ];
         for case in cases {
             assert_eq!(resolve(case.scope, &case.key), case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn digits_resolve_to_source_jumps_only_on_results() {
+        struct Case {
+            name: &'static str,
+            scope: Scope,
+            character: char,
+            want: Option<Action>,
+        }
+        let cases = [
+            Case {
+                name: "digit one jumps to the first source",
+                scope: Scope::Results,
+                character: '1',
+                want: Some(Action::JumpToSource(1)),
+            },
+            Case {
+                name: "digit five jumps to the fifth source",
+                scope: Scope::Results,
+                character: '5',
+                want: Some(Action::JumpToSource(5)),
+            },
+            Case {
+                name: "digit nine jumps to the ninth source",
+                scope: Scope::Results,
+                character: '9',
+                want: Some(Action::JumpToSource(9)),
+            },
+            Case {
+                name: "digit zero is not a jump",
+                scope: Scope::Results,
+                character: '0',
+                want: None,
+            },
+            Case {
+                name: "digits do not jump outside results",
+                scope: Scope::Home,
+                character: '5',
+                want: None,
+            },
+        ];
+        for case in cases {
+            let key = KeyEvent::new(KeyCode::Char(case.character), KeyModifiers::NONE);
+            assert_eq!(resolve(case.scope, &key), case.want, "{}", case.name);
         }
     }
 
