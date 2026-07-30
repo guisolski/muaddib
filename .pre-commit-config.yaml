@@ -1,0 +1,58 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=512]
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: detect-private-key
+      - id: check-executables-have-shebangs
+      - id: check-shebang-scripts-are-executable
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: forbid-submodules
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1
+    hooks:
+      - id: typos
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  - repo: local
+    hooks:
+      - id: no-comments
+        name: forbid comments in rust sources
+        entry: python3 scripts/check_no_comments.py
+        language: system
+        types: [rust]
+      - id: cargo-fmt
+        name: cargo fmt check
+        entry: cargo fmt --all -- --check
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: cargo clippy all targets, deny warnings
+        entry: cargo clippy --all-targets --all-features -- -D warnings
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-test
+        name: cargo test all features
+        entry: cargo test --all-features
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]
