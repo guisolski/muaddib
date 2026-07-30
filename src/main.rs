@@ -43,8 +43,13 @@ async fn main() -> ExitCode {
     if cli.print {
         run_headless(&cli, &config, &statuses).await
     } else {
-        eprintln!("faro: the TUI is not wired yet; run with --print QUERY");
-        ExitCode::from(2)
+        match faro::tui::run(config, statuses, cli.query.clone(), cli.mode).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(error) => {
+                eprintln!("faro: {error}");
+                ExitCode::FAILURE
+            }
+        }
     }
 }
 
