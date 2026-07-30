@@ -8,10 +8,12 @@ and emits events.
 
 ### 1. Expand
 
-One engine call (45s timeout) asks for at most `breadth` sub-queries as JSON:
+One engine call (45s timeout) rates the query's complexity and asks for at most
+`breadth` sub-queries as JSON:
 
 ```json
-{"subqueries": [{"query": "...", "lang": "BCP-47", "rationale": "..."}]}
+{"complexity": "simple|standard",
+ "subqueries": [{"query": "...", "lang": "BCP-47", "rationale": "..."}]}
 ```
 
 The prompt demands distinct facets and — for cross-language modes — at least one
@@ -21,7 +23,11 @@ breadth. **Any failure degrades, never aborts**: a per-mode fallback facet table
 (`fallback_expansion`) produces a deterministic plan offline.
 
 Breadth comes from the mode (`General` 3, `Scientific` 4, `News` 3, `Deep` 6)
-unless `expansion_breadth` overrides it (1–8).
+unless `expansion_breadth` overrides it (1–8). A `"simple"` complexity rating —
+the model judging that one direct search fully answers the query — narrows the
+plan to a single sub-query, so simple questions skip the fan-out cost entirely
+and reach synthesis with a small findings payload. An absent, unknown, or
+malformed rating keeps the full breadth.
 
 ### 2. Fan-out
 
@@ -50,7 +56,10 @@ One final engine call receives the merged findings as JSON plus the answer
 schema (`core/answer.rs::ANSWER_SCHEMA` — via `--json-schema` on claude,
 inlined in the prompt otherwise) and the instruction to answer entirely in the
 configured language, citing `source_ids` on every block, using **only** URLs
-present in the findings.
+present in the findings. The prompt favors compact visual blocks — short
+paragraphs, lists, tables, charts — and asks for a `diagram` block (`flow` for
+processes and causal chains, `timeline` for chronologies) that visualizes the
+answer's core structure.
 
 Then `renumber_sources` (pure) enforces the contract:
 

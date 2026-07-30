@@ -32,6 +32,11 @@ pub fn plan_from_expansion(
     expansion: &Value,
     breadth: u8,
 ) -> SearchPlan {
+    let breadth = if simple_complexity(expansion) {
+        1
+    } else {
+        breadth
+    };
     let parsed = parse_subqueries(expansion, answer_lang);
     let sub_queries = if parsed.is_empty() {
         fallback_expansion(original, mode, answer_lang, breadth)
@@ -44,6 +49,13 @@ pub fn plan_from_expansion(
         answer_lang: answer_lang.to_string(),
         sub_queries,
     }
+}
+
+fn simple_complexity(expansion: &Value) -> bool {
+    expansion
+        .get("complexity")
+        .and_then(Value::as_str)
+        .is_some_and(|rating| rating.eq_ignore_ascii_case("simple"))
 }
 
 fn parse_subqueries(expansion: &Value, default_lang: &str) -> Vec<SubQuery> {
@@ -314,6 +326,66 @@ mod tests {
         for case in cases {
             let plan = plan_from_expansion("root", Mode::News, "en", &case.expansion, 3);
             assert_eq!(plan.sub_queries.len(), 3, "{}", case.name);
+            assert_eq!(plan.sub_queries[0].query, "root", "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn simple_complexity_narrows_the_plan_to_one_subquery() {
+        struct Case {
+            name: &'static str,
+            expansion: Value,
+            want_len: usize,
+        }
+        let cases = [
+            Case {
+                name: "simple keeps only the literal query",
+                expansion: json!({
+                    "complexity": "simple",
+                    "subqueries": [{"query": "root"}, {"query": "root basics"}]
+                }),
+                want_len: 1,
+            },
+            Case {
+                name: "rating is case insensitive",
+                expansion: json!({
+                    "complexity": "Simple",
+                    "subqueries": [{"query": "a"}, {"query": "b"}]
+                }),
+                want_len: 1,
+            },
+            Case {
+                name: "standard keeps the full breadth",
+                expansion: json!({
+                    "complexity": "standard",
+                    "subqueries": [{"query": "a"}, {"query": "b"}]
+                }),
+                want_len: 3,
+            },
+            Case {
+                name: "missing rating keeps the full breadth",
+                expansion: json!({
+                    "subqueries": [{"query": "a"}, {"query": "b"}]
+                }),
+                want_len: 3,
+            },
+            Case {
+                name: "garbage rating keeps the full breadth",
+                expansion: json!({
+                    "complexity": 7,
+                    "subqueries": [{"query": "a"}, {"query": "b"}]
+                }),
+                want_len: 3,
+            },
+            Case {
+                name: "simple with unusable subqueries falls back to the literal query",
+                expansion: json!({"complexity": "simple", "subqueries": []}),
+                want_len: 1,
+            },
+        ];
+        for case in cases {
+            let plan = plan_from_expansion("root", Mode::General, "en", &case.expansion, 3);
+            assert_eq!(plan.sub_queries.len(), case.want_len, "{}", case.name);
             assert_eq!(plan.sub_queries[0].query, "root", "{}", case.name);
         }
     }

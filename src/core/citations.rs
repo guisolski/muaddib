@@ -175,7 +175,8 @@ fn block_source_id_slots(blocks: &[Block]) -> Vec<&Vec<u32>> {
             Block::Paragraph { source_ids, .. }
             | Block::Quote { source_ids, .. }
             | Block::Table { source_ids, .. }
-            | Block::Chart { source_ids, .. } => slots.push(source_ids),
+            | Block::Chart { source_ids, .. }
+            | Block::Diagram { source_ids, .. } => slots.push(source_ids),
             Block::List { items, .. } => {
                 slots.extend(items.iter().map(|item| &item.source_ids));
             }
@@ -192,7 +193,8 @@ fn block_source_id_slots_mut(blocks: &mut [Block]) -> Vec<&mut Vec<u32>> {
             Block::Paragraph { source_ids, .. }
             | Block::Quote { source_ids, .. }
             | Block::Table { source_ids, .. }
-            | Block::Chart { source_ids, .. } => slots.push(source_ids),
+            | Block::Chart { source_ids, .. }
+            | Block::Diagram { source_ids, .. } => slots.push(source_ids),
             Block::List { items, .. } => {
                 slots.extend(items.iter_mut().map(|item| &mut item.source_ids));
             }
@@ -205,7 +207,7 @@ fn block_source_id_slots_mut(blocks: &mut [Block]) -> Vec<&mut Vec<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::answer::{Emphasis, ListItem};
+    use crate::core::answer::{DiagramType, Emphasis, ListItem};
 
     fn finding(claim: &str, url: &str) -> Finding {
         Finding {
@@ -487,6 +489,34 @@ mod tests {
         };
         assert_eq!(items[0].source_ids, vec![1, 2]);
         assert_eq!(items[1].source_ids, vec![2]);
+    }
+
+    #[test]
+    fn renumber_remaps_diagram_source_ids() {
+        let answer = Answer {
+            blocks: vec![Block::Diagram {
+                diagram_type: DiagramType::Flow,
+                title: "d".to_string(),
+                items: vec![],
+                source_ids: vec![9, 4],
+                emphasis: Emphasis::None,
+            }],
+            sources: vec![
+                source(4, "https://a.example"),
+                source(9, "https://b.example"),
+            ],
+            ..Answer::default()
+        };
+        let allowed = BTreeSet::from([
+            "https://a.example".to_string(),
+            "https://b.example".to_string(),
+        ]);
+        let renumbered = renumber_sources(answer, &allowed);
+        let Block::Diagram { source_ids, .. } = &renumbered.blocks[0] else {
+            panic!("expected a diagram block");
+        };
+        assert_eq!(source_ids, &vec![1, 2]);
+        assert_eq!(renumbered.sources[0].url, "https://b.example");
     }
 
     #[test]

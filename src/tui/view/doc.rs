@@ -2,6 +2,8 @@ use crate::core::answer::{Answer, Block, ListItem, Source};
 use crate::pipeline::LinkStatus;
 use crate::tui::theme;
 use crate::tui::widgets::chart::bar_chart_lines;
+use crate::tui::widgets::diagram::diagram_lines;
+use crate::tui::widgets::textwrap::wrap_text;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use std::collections::HashMap;
@@ -30,7 +32,7 @@ pub struct RenderedDoc {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DocAnim {
     pub revealed_blocks: usize,
-    pub chart_growth: Vec<f64>,
+    pub growth: Vec<f64>,
     pub block_overlays: Vec<Option<Style>>,
     pub source_overlay: Option<(usize, Style)>,
 }
@@ -39,7 +41,7 @@ impl DocAnim {
     pub fn settled(block_count: usize) -> Self {
         Self {
             revealed_blocks: block_count,
-            chart_growth: vec![1.0; block_count],
+            growth: vec![1.0; block_count],
             block_overlays: vec![None; block_count],
             source_overlay: None,
         }
@@ -86,7 +88,7 @@ pub fn render_doc(
     for (index, block) in answer.blocks.iter().enumerate() {
         let start = lines.len();
         if index < anim.revealed_blocks {
-            let fraction = anim.chart_growth.get(index).copied().unwrap_or(1.0);
+            let fraction = anim.growth.get(index).copied().unwrap_or(1.0);
             append_block(&mut lines, block, text_width, width, fraction);
             if let Some(overlay) = anim.block_overlays.get(index).copied().flatten() {
                 for line in &mut lines[start..] {
@@ -130,7 +132,7 @@ fn append_block(
     block: &Block,
     text_width: usize,
     width: u16,
-    chart_fraction: f64,
+    growth: f64,
 ) {
     match block {
         Block::Heading { text, .. } => {
@@ -171,8 +173,23 @@ fn append_block(
                 Span::styled(title.clone(), theme::heading()),
                 citation_span(source_ids),
             ]));
-            for row in bar_chart_lines(labels, values, unit, width, chart_fraction) {
+            for row in bar_chart_lines(labels, values, unit, width, growth) {
                 lines.push(Line::styled(row, theme::citation()));
+            }
+        }
+        Block::Diagram {
+            diagram_type,
+            title,
+            items,
+            source_ids,
+            ..
+        } => {
+            lines.push(Line::from(vec![
+                Span::styled(title.clone(), theme::heading()),
+                citation_span(source_ids),
+            ]));
+            for row in diagram_lines(*diagram_type, items, text_width, growth) {
+                lines.push(Line::raw(row));
             }
         }
         Block::Unknown => {}
@@ -345,30 +362,6 @@ fn append_followups(
         .collect()
 }
 
-pub fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let mut rows = Vec::new();
-    let mut current = String::new();
-    for word in text.split_whitespace() {
-        if current.is_empty() {
-            current = word.to_string();
-        } else if current.chars().count() + 1 + word.chars().count() <= width {
-            current.push(' ');
-            current.push_str(word);
-        } else {
-            rows.push(std::mem::take(&mut current));
-            current = word.to_string();
-        }
-    }
-    if !current.is_empty() {
-        rows.push(current);
-    }
-    if rows.is_empty() {
-        rows.push(String::new());
-    }
-    rows
-}
-
 pub fn layout_table(headers: &[String], rows: &[Vec<String>], width: usize) -> Vec<String> {
     if headers.is_empty() && rows.is_empty() {
         return Vec::new();
@@ -435,7 +428,9 @@ fn separator_row(widths: &[usize]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::answer::{Block, ChartType, Emphasis, ListItem, Source};
+    use crate::core::answer::{
+        Block, ChartType, DiagramItem, DiagramType, Emphasis, ListItem, Source,
+    };
     use ratatui::style::Modifier;
 
     fn text_of(line: &Line) -> String {
@@ -503,6 +498,22 @@ mod tests {
                     source_ids: vec![2],
                     emphasis: Emphasis::None,
                 },
+                Block::Diagram {
+                    diagram_type: DiagramType::Flow,
+                    title: "Pipeline".to_string(),
+                    items: vec![
+                        DiagramItem {
+                            label: "Expand".to_string(),
+                            detail: "one call".to_string(),
+                        },
+                        DiagramItem {
+                            label: "Search".to_string(),
+                            detail: String::new(),
+                        },
+                    ],
+                    source_ids: vec![1],
+                    emphasis: Emphasis::None,
+                },
                 Block::Unknown,
             ],
             sources: vec![
@@ -534,7 +545,7 @@ mod tests {
             Case {
                 name: "full answer",
                 answer: full_answer(),
-                want_empty: &[6],
+                want_empty: &[7],
             },
             Case {
                 name: "unknown block yields empty range",
@@ -740,6 +751,11 @@ mod tests {
         assert!(joined.contains("─"));
         assert!(joined.contains("Share [2]"));
         assert!(joined.contains("▇"));
+        assert!(joined.contains("Pipeline [1]"));
+        assert!(joined.contains("● Expand"));
+        assert!(joined.contains("  one call"));
+        assert!(joined.contains("▼"));
+        assert!(joined.contains("● Search"));
         assert!(joined.contains("[1] ✓ One — https://one.example (en)"));
         assert!(joined.contains("[2] ✗ 404 Two — https://two.example (en)"));
         assert!(joined.contains("→ next"));
@@ -801,42 +817,14 @@ mod tests {
     }
 
     #[test]
-    fn wrap_text_greedily_fills_lines() {
-        struct Case {
-            name: &'static str,
-            text: &'static str,
-            width: usize,
-            want: Vec<&'static str>,
-        }
-        let cases = [
-            Case {
-                name: "fits on one line",
-                text: "short text",
-                width: 20,
-                want: vec!["short text"],
-            },
-            Case {
-                name: "wraps at word boundaries",
-                text: "one two three four",
-                width: 9,
-                want: vec!["one two", "three", "four"],
-            },
-            Case {
-                name: "long word overflows its own line",
-                text: "a verylongword b",
-                width: 5,
-                want: vec!["a", "verylongword", "b"],
-            },
-            Case {
-                name: "empty text yields one empty row",
-                text: "",
-                width: 10,
-                want: vec![""],
-            },
-        ];
-        for case in cases {
-            assert_eq!(wrap_text(case.text, case.width), case.want, "{}", case.name);
-        }
+    fn diagram_items_grow_with_the_block_fraction() {
+        let answer = full_answer();
+        let mut anim = DocAnim::settled(answer.blocks.len());
+        anim.growth[6] = 0.5;
+        let doc = render_doc(&answer, 60, &HashMap::new(), DocSelection::None, &anim);
+        let joined = doc.lines.iter().map(text_of).collect::<Vec<_>>().join("\n");
+        assert!(joined.contains("● Expand"));
+        assert!(!joined.contains("● Search"));
     }
 
     #[test]

@@ -44,9 +44,11 @@ where **every claim carries a verified source link**.
 - Minimalist TUI: one centered search bar, four focus modes (`General`, `Scientific`,
   `News`, `Deep`)
 - Multilingual query expansion with a deterministic offline fallback
+- Model-decided fast path: simple questions are rated `simple` at expansion and
+  run a single search instead of the full fan-out
 - Parallel fan-out with per-sub-query live progress
-- Structured answers: headings, paragraphs, lists, quotes, tables, and terminal
-  bar charts — all cited
+- Structured answers: headings, paragraphs, lists, quotes, tables, terminal
+  bar charts, and flow/timeline diagrams — all cited
 - Live link validation (✓ / ✗ 404) directly in the sources list
 - Config modal (`Ctrl+O`): answer language, engine, model, link validation, parallelism
 - Headless mode (`--print`) that emits the answer as JSON for scripting
@@ -125,16 +127,19 @@ flowchart LR
     V --> A[cited answer]
 ```
 
-1. **Expand** — one engine call turns your query into up to N sub-queries covering
-   distinct facets, including at least one in another relevant language. If the call
-   fails, a deterministic per-mode fallback table keeps the search alive.
+1. **Expand** — one engine call rates the query's complexity and turns it into up
+   to N sub-queries covering distinct facets, including at least one in another
+   relevant language. A `simple` rating narrows the plan to a single search, so
+   quick factual questions come back fast. If the call fails, a deterministic
+   per-mode fallback table keeps the search alive.
 2. **Fan-out** — sub-searches run concurrently (`buffer_unordered`, bounded by
    `max_parallel`), each returning claims with exact source URLs.
 3. **Merge** — findings are deduplicated by normalized URL + claim.
 4. **Synthesize** — one final engine call compiles everything into a structured JSON
-   answer in *your* language, validated against a JSON Schema. Sources whose URLs
-   never appeared in the findings are ejected (anti-hallucination gate) and citations
-   are renumbered in first-use order.
+   answer in *your* language, validated against a JSON Schema — favoring compact
+   visual blocks and including a flow or timeline diagram of the answer's core
+   structure. Sources whose URLs never appeared in the findings are ejected
+   (anti-hallucination gate) and citations are renumbered in first-use order.
 5. **Validate** — every source URL gets a parallel HTTP HEAD check; the sources list
    updates live with ✓ / ✗.
 

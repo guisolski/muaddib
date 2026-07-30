@@ -10,12 +10,15 @@ pub const SYNTHESIS_MARKER: &str = "FARO:SYNTH";
 pub fn expansion_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, breadth: u8) -> String {
     format!(
         "[task {EXPANSION_MARKER}] You are the query planner of a meta-search engine.\n\
-         Expand the query below into at most {breadth} sub-queries covering distinct facets of the topic.{cross_language_rule}\n\
+         First rate the query complexity: \"simple\" when one direct search fully answers it \
+         (a fact, a definition, a single lookup), \"standard\" otherwise.\n\
+         For a simple query return exactly one sub-query: the query itself.\n\
+         Otherwise expand the query below into at most {breadth} sub-queries covering distinct facets of the topic.{cross_language_rule}\n\
          Search mode: {label}. {instructions}\n\
          The final answer will be written in {answer_lang}.\n\
          Query: {query}\n\
          Reply with ONLY this JSON, no prose:\n\
-         {{\"subqueries\":[{{\"query\":\"...\",\"lang\":\"BCP-47 tag\",\"rationale\":\"...\"}}]}}",
+         {{\"complexity\":\"simple|standard\",\"subqueries\":[{{\"query\":\"...\",\"lang\":\"BCP-47 tag\",\"rationale\":\"...\"}}]}}",
         cross_language_rule = cross_language_rule(mode),
         label = mode.label,
         instructions = mode.instructions,
@@ -64,6 +67,11 @@ pub fn synthesis_prompt(plan: &SearchPlan, merged: &MergedFindings, inline_schem
          invent a URL.\n\
          - Number sources starting at 1.\n\
          - Add a chart block when the findings contain comparable numbers.\n\
+         - Add a diagram block that visualizes the answer's core structure: diagram_type \
+         \"flow\" for processes or causal chains, \"timeline\" for chronologies; give each \
+         item a short label and an optional one-line detail.\n\
+         - Keep prose tight: prefer short paragraphs, lists, tables, charts, and diagrams \
+         over long text.\n\
          - Optionally set emphasis to \"highlight\" on the single block that carries the key \
          takeaway.\n\
          - Suggest up to 3 follow-up queries in the followups array.\n\
@@ -195,6 +203,23 @@ mod tests {
         let prompt = synthesis_prompt(&sample_plan(), &sample_merged(), false);
         assert!(prompt.contains("emphasis"));
         assert!(prompt.contains("\"highlight\""));
+    }
+
+    #[test]
+    fn synthesis_prompt_requests_a_diagram_and_compact_blocks() {
+        let prompt = synthesis_prompt(&sample_plan(), &sample_merged(), false);
+        assert!(prompt.contains("diagram"));
+        assert!(prompt.contains("\"flow\""));
+        assert!(prompt.contains("\"timeline\""));
+        assert!(prompt.contains("short paragraphs"));
+    }
+
+    #[test]
+    fn expansion_prompt_asks_for_a_complexity_rating() {
+        let prompt = expansion_prompt("q", Mode::General.spec(), "en", 3);
+        assert!(prompt.contains("complexity"));
+        assert!(prompt.contains("\"simple\""));
+        assert!(prompt.contains("exactly one sub-query"));
     }
 
     #[test]

@@ -51,7 +51,7 @@ pub fn doc_anim(
     let mut anim = DocAnim::settled(block_count);
     if let Some(started) = reveal_started {
         anim.revealed_blocks = revealed_blocks(started, now, block_count);
-        anim.chart_growth = (0..block_count)
+        anim.growth = (0..block_count)
             .map(|index| chart_fraction(started, now, index))
             .collect();
         anim.block_overlays = answer
@@ -88,7 +88,8 @@ fn block_emphasis(block: &Block) -> Emphasis {
         | Block::List { emphasis, .. }
         | Block::Quote { emphasis, .. }
         | Block::Table { emphasis, .. }
-        | Block::Chart { emphasis, .. } => *emphasis,
+        | Block::Chart { emphasis, .. }
+        | Block::Diagram { emphasis, .. } => *emphasis,
         Block::Unknown => Emphasis::None,
     }
 }

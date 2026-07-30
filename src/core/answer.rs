@@ -62,8 +62,43 @@ pub enum Block {
         #[serde(default)]
         emphasis: Emphasis,
     },
+    Diagram {
+        #[serde(default)]
+        diagram_type: DiagramType,
+        title: String,
+        items: Vec<DiagramItem>,
+        #[serde(default)]
+        source_ids: Vec<u32>,
+        #[serde(default)]
+        emphasis: Emphasis,
+    },
     #[serde(other)]
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", from = "String")]
+pub enum DiagramType {
+    #[default]
+    Flow,
+    Timeline,
+}
+
+impl From<String> for DiagramType {
+    fn from(raw: String) -> Self {
+        if raw.eq_ignore_ascii_case("timeline") {
+            Self::Timeline
+        } else {
+            Self::Flow
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagramItem {
+    pub label: String,
+    #[serde(default)]
+    pub detail: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +262,28 @@ pub const ANSWER_SCHEMA: &str = r##"{
             "source_ids": {"$ref": "#/definitions/source_ids"},
             "emphasis": {"$ref": "#/definitions/emphasis"}
           }
+        },
+        {
+          "type": "object",
+          "required": ["type", "title", "items", "source_ids"],
+          "properties": {
+            "type": {"const": "diagram"},
+            "diagram_type": {"enum": ["flow", "timeline"]},
+            "title": {"type": "string"},
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["label"],
+                "properties": {
+                  "label": {"type": "string"},
+                  "detail": {"type": "string"}
+                }
+              }
+            },
+            "source_ids": {"$ref": "#/definitions/source_ids"},
+            "emphasis": {"$ref": "#/definitions/emphasis"}
+          }
         }
       ]
     }
@@ -259,6 +316,16 @@ mod tests {
                     labels: vec!["A".to_string(), "B".to_string()],
                     values: vec![40.0, 60.0],
                     unit: "%".to_string(),
+                    source_ids: vec![1],
+                    emphasis: Emphasis::None,
+                },
+                Block::Diagram {
+                    diagram_type: DiagramType::Flow,
+                    title: "Pipeline".to_string(),
+                    items: vec![DiagramItem {
+                        label: "Expand".to_string(),
+                        detail: "one engine call".to_string(),
+                    }],
                     source_ids: vec![1],
                     emphasis: Emphasis::None,
                 },
@@ -382,6 +449,74 @@ mod tests {
             let block: Block = serde_json::from_value(case.input.clone()).unwrap();
             let back = serde_json::to_value(&block).unwrap();
             assert_eq!(back["emphasis"], json!(case.want), "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn diagram_blocks_parse_with_tolerant_fields() {
+        struct Case {
+            name: &'static str,
+            input: serde_json::Value,
+            want_type: DiagramType,
+            want_detail: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "explicit flow",
+                input: json!({
+                    "type": "diagram",
+                    "diagram_type": "flow",
+                    "title": "d",
+                    "items": [{"label": "a", "detail": "why"}]
+                }),
+                want_type: DiagramType::Flow,
+                want_detail: "why",
+            },
+            Case {
+                name: "timeline",
+                input: json!({
+                    "type": "diagram",
+                    "diagram_type": "timeline",
+                    "title": "d",
+                    "items": [{"label": "1969", "detail": "moon landing"}]
+                }),
+                want_type: DiagramType::Timeline,
+                want_detail: "moon landing",
+            },
+            Case {
+                name: "missing diagram_type defaults to flow",
+                input: json!({
+                    "type": "diagram",
+                    "title": "d",
+                    "items": [{"label": "a"}]
+                }),
+                want_type: DiagramType::Flow,
+                want_detail: "",
+            },
+            Case {
+                name: "unknown diagram_type degrades to flow",
+                input: json!({
+                    "type": "diagram",
+                    "diagram_type": "mindmap",
+                    "title": "d",
+                    "items": [{"label": "a"}]
+                }),
+                want_type: DiagramType::Flow,
+                want_detail: "",
+            },
+        ];
+        for case in cases {
+            let block: Block = serde_json::from_value(case.input.clone()).unwrap();
+            let Block::Diagram {
+                diagram_type,
+                items,
+                ..
+            } = block
+            else {
+                panic!("{}", case.name);
+            };
+            assert_eq!(diagram_type, case.want_type, "{}", case.name);
+            assert_eq!(items[0].detail, case.want_detail, "{}", case.name);
         }
     }
 

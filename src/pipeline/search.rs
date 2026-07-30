@@ -219,23 +219,38 @@ mod tests {
 
     struct FakeEngine {
         fail_markers: Vec<&'static str>,
+        simple_expansion: bool,
     }
 
     impl FakeEngine {
         fn reliable() -> Self {
             Self {
                 fail_markers: vec![],
+                simple_expansion: false,
             }
         }
 
         fn failing_on(markers: &[&'static str]) -> Self {
             Self {
                 fail_markers: markers.to_vec(),
+                simple_expansion: false,
             }
         }
 
-        fn canned_response(marker: &str) -> String {
+        fn rating_simple() -> Self {
+            Self {
+                fail_markers: vec![],
+                simple_expansion: true,
+            }
+        }
+
+        fn canned_response(&self, marker: &str) -> String {
             match marker {
+                EXPANSION_MARKER if self.simple_expansion => r#"{"complexity":"simple","subqueries":[
+                    {"query":"rust async runtimes","lang":"en","rationale":"literal"},
+                    {"query":"rust async runtimes comparison","lang":"en","rationale":"facet"}
+                ]}"#
+                .to_string(),
                 EXPANSION_MARKER => r#"{"subqueries":[
                     {"query":"topic overview","lang":"en","rationale":"facet"},
                     {"query":"tema em detalhe","lang":"pt-BR","rationale":"facet"}
@@ -285,7 +300,7 @@ mod tests {
                     return Err(EngineError::Reported(format!("forced failure: {marker}")));
                 }
                 Ok(EngineOutput {
-                    text: Self::canned_response(marker),
+                    text: self.canned_response(marker),
                 })
             })
         }
@@ -366,6 +381,17 @@ mod tests {
                 source_ids.iter().all(|id| *id <= 2),
             _ => true,
         }));
+    }
+
+    #[tokio::test]
+    async fn simple_complexity_runs_a_single_sub_search() {
+        let events = collect_events(FakeEngine::rating_simple()).await;
+        let started = events
+            .iter()
+            .filter(|event| matches!(event, SearchEvent::SubQueryStarted { .. }))
+            .count();
+        assert_eq!(started, 1);
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
     }
 
     #[tokio::test]
