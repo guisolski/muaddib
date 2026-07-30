@@ -20,7 +20,8 @@ where **every claim carries a verified source link**.
                 ╰──────────────────────────────────────╯
                  General · Scientific · News · Deep
 
-     engine: claude ●  │  model: default  │  lang: pt-BR  │  Ctrl+O config
+                        claude ● · default · pt-BR
+          Enter search · Tab mode · Ctrl+O config · Ctrl+G help
 ```
 
 ## Why faro?

@@ -18,10 +18,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
         gap2,
         notice_row,
         status_row,
+        hints_row,
     ] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(3),
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -40,6 +42,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         );
     }
     frame.render_widget(Paragraph::new(status_line(app)).centered(), status_row);
+    frame.render_widget(Paragraph::new(hints_line()).centered(), hints_row);
 }
 
 fn wordmark_line() -> Paragraph<'static> {
@@ -95,15 +98,18 @@ fn status_line(app: &App) -> Line<'static> {
         .model_override(&app.config.engine)
         .unwrap_or("default");
     Line::from(vec![
-        Span::styled(format!("engine: {} ", app.config.engine), theme::dim()),
+        Span::styled(format!("{} ", app.config.engine), theme::dim()),
         Span::styled("●", dot_style),
         Span::styled(
-            format!("  │  model: {model}  │  lang: {}  │  ", app.config.language),
-            theme::dim(),
-        ),
-        Span::styled(
-            "Enter search · Tab mode · Ctrl+O config · Ctrl+G help",
+            format!(" · {model} · {}", app.config.language),
             theme::dim(),
         ),
     ])
+}
+
+fn hints_line() -> Line<'static> {
+    Line::styled(
+        "Enter search · Tab mode · Ctrl+O config · Ctrl+G help",
+        theme::dim(),
+    )
 }
