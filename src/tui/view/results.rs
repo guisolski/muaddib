@@ -1,13 +1,16 @@
 use crate::tui::anim;
-use crate::tui::app::{App, Focus};
+use crate::tui::app::{App, Focus, ImageFetch};
+use crate::tui::images::ImageRuntime;
 use crate::tui::theme;
-use crate::tui::view::doc::{self, DocSelection};
+use crate::tui::view::doc::{self, DocSelection, IMAGE_ROWS, ImageSlot};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout};
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
+use ratatui_image::{CropOptions, Resize, StatefulImage};
+use std::collections::HashMap;
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     let [content, footer] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
     let Some(answer) = &app.answer else {
@@ -30,7 +33,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
         app.tick,
         app.config.animations,
     );
-    let rendered = doc::render_doc(answer, width, &app.links, selection, &block_anim);
+    let rendered = doc::render_doc(
+        answer,
+        width,
+        &app.links,
+        selection,
+        &block_anim,
+        &app.images,
+    );
     let [padded] = Layout::horizontal([Constraint::Length(width)])
         .flex(ratatui::layout::Flex::Center)
         .areas(content);
@@ -38,10 +48,52 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Paragraph::new(rendered.lines).scroll((app.scroll, 0)),
         padded,
     );
+    draw_images(
+        frame,
+        &mut app.image_runtime,
+        &app.images,
+        &rendered.image_slots,
+        app.scroll,
+        padded,
+    );
     frame.render_widget(
         Paragraph::new(Line::styled(footer_hint(app.focus), theme::dim())).centered(),
         footer,
     );
+}
+
+fn draw_images(
+    frame: &mut Frame,
+    runtime: &mut ImageRuntime,
+    images: &HashMap<String, ImageFetch>,
+    slots: &[ImageSlot],
+    scroll: u16,
+    area: Rect,
+) {
+    let slot_rows = u16::try_from(IMAGE_ROWS).unwrap_or(u16::MAX);
+    for slot in slots {
+        let Some(ImageFetch::Ready(bytes)) = images.get(&slot.url) else {
+            continue;
+        };
+        let Some((offset, height, clip_top)) = doc::visible_rows(slot.range, scroll, area.height)
+        else {
+            continue;
+        };
+        let Some(protocol) = runtime.protocol(&slot.url, bytes, area.width, slot_rows) else {
+            continue;
+        };
+        let target = Rect {
+            x: area.x,
+            y: area.y + offset,
+            width: area.width,
+            height,
+        };
+        let widget = StatefulImage::new().resize(Resize::Crop(Some(CropOptions {
+            clip_top,
+            clip_left: false,
+        })));
+        frame.render_stateful_widget(widget, target, protocol);
+    }
 }
 
 fn footer_hint(focus: Focus) -> &'static str {

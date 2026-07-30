@@ -4,6 +4,7 @@ use crate::core::mode::{MODES, Mode};
 use crate::core::plan::SearchPlan;
 use crate::engines::{EngineSpec, EngineStatus};
 use crate::pipeline::{LinkStatus, SearchHandle};
+use crate::tui::images::ImageRuntime;
 use std::collections::HashMap;
 use std::time::Instant;
 use tui_input::Input;
@@ -43,6 +44,12 @@ pub enum Focus {
 pub struct Pulse {
     pub source: usize,
     pub started: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImageFetch {
+    Ready(Vec<u8>),
+    Failed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,6 +174,8 @@ pub struct App {
     pub synthesizing: bool,
     pub answer: Option<Answer>,
     pub links: HashMap<u32, LinkStatus>,
+    pub images: HashMap<String, ImageFetch>,
+    pub image_runtime: ImageRuntime,
     pub viewport: Viewport,
     pub scroll: u16,
     pub focus: Focus,
@@ -195,6 +204,8 @@ impl App {
             synthesizing: false,
             answer: None,
             links: HashMap::new(),
+            images: HashMap::new(),
+            image_runtime: ImageRuntime::default(),
             viewport: Viewport::default(),
             scroll: 0,
             focus: Focus::Body,
@@ -218,6 +229,8 @@ impl App {
         self.synthesizing = false;
         self.answer = None;
         self.links.clear();
+        self.images.clear();
+        self.image_runtime.clear();
         self.scroll = 0;
         self.focus = Focus::Body;
         self.reveal_started = None;

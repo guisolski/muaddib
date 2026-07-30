@@ -41,9 +41,11 @@ pub fn sub_search_prompt(sub: &SubQuery, mode: &ModeSpec) -> String {
          Search mode: {label}. {instructions}\n\
          Collect concrete findings, each with the exact URL of the page that supports it.\n\
          Only report URLs of pages you actually consulted; never invent or guess a URL.\n\
+         When a consulted page shows a relevant image (photo, chart, figure), add the \
+         direct URL of that image file as image_url; omit image_url otherwise.\n\
          Reply with ONLY this JSON, no prose:\n\
          {{\"summary\":\"...\",\"findings\":[{{\"claim\":\"...\",\"source_title\":\"...\",\
-         \"source_url\":\"https://...\",\"lang\":\"...\"}}]}}",
+         \"source_url\":\"https://...\",\"lang\":\"...\",\"image_url\":\"https://...\"}}]}}",
         query = sub.query,
         lang = sub.lang,
         label = mode.label,
@@ -70,6 +72,9 @@ pub fn synthesis_prompt(plan: &SearchPlan, merged: &MergedFindings, inline_schem
          - Add a diagram block that visualizes the answer's core structure: diagram_type \
          \"flow\" for processes or causal chains, \"timeline\" for chronologies; give each \
          item a short label and an optional one-line detail.\n\
+         - Add an image block (url plus a short caption) when a finding carries an \
+         image_url worth showing; use only image_url values from the findings, never \
+         another URL.\n\
          - Keep prose tight: prefer short paragraphs, lists, tables, charts, and diagrams \
          over long text.\n\
          - Optionally set emphasis to \"highlight\" on the single block that carries the key \
@@ -121,6 +126,7 @@ mod tests {
                 source_title: "Report".to_string(),
                 source_url: "https://example.com/report".to_string(),
                 lang: "en".to_string(),
+                image_url: String::new(),
             }],
             summaries: vec!["[q] short summary".to_string()],
         }
@@ -212,6 +218,25 @@ mod tests {
         assert!(prompt.contains("\"flow\""));
         assert!(prompt.contains("\"timeline\""));
         assert!(prompt.contains("short paragraphs"));
+    }
+
+    #[test]
+    fn sub_search_prompt_asks_for_page_images() {
+        let sub = SubQuery {
+            query: "q".to_string(),
+            lang: "en".to_string(),
+            rationale: String::new(),
+        };
+        let prompt = sub_search_prompt(&sub, Mode::General.spec());
+        assert!(prompt.contains("image_url"));
+        assert!(prompt.contains("direct URL of that image"));
+    }
+
+    #[test]
+    fn synthesis_prompt_allows_image_blocks_from_findings_only() {
+        let prompt = synthesis_prompt(&sample_plan(), &sample_merged(), false);
+        assert!(prompt.contains("image block"));
+        assert!(prompt.contains("image_url"));
     }
 
     #[test]

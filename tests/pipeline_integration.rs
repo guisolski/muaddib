@@ -27,6 +27,7 @@ fn request() -> SearchRequest {
         max_parallel: 4,
         engine_timeout: Duration::from_secs(20),
         validate_links: false,
+        fetch_images: false,
     }
 }
 

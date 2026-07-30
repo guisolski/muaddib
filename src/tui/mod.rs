@@ -1,6 +1,7 @@
 pub mod anim;
 pub mod app;
 pub mod event;
+pub mod images;
 pub mod keymap;
 pub mod theme;
 pub mod update;
@@ -42,6 +43,12 @@ pub async fn run(
             width: size.width,
             height: size.height,
         };
+    }
+    if app.config.images {
+        app.image_runtime.picker = Some(
+            ratatui_image::picker::Picker::from_query_stdio()
+                .unwrap_or_else(|_| ratatui_image::picker::Picker::halfblocks()),
+        );
     }
     let result = event_loop(&mut terminal, &mut app).await;
     ratatui::restore();

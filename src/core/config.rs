@@ -15,6 +15,7 @@ pub struct Config {
     pub max_parallel: u8,
     pub expansion_breadth: u8,
     pub validate_links: bool,
+    pub images: bool,
     pub animations: bool,
     pub engine_timeout_secs: u64,
     pub engines: BTreeMap<String, EngineOverride>,
@@ -41,6 +42,7 @@ impl Default for Config {
             max_parallel: 4,
             expansion_breadth: MODE_DEFAULT_BREADTH,
             validate_links: true,
+            images: true,
             animations: true,
             engine_timeout_secs: 180,
             engines: BTreeMap::new(),
@@ -153,6 +155,31 @@ mod tests {
             let config = parse_config(case.input).unwrap();
             assert_eq!(config.max_parallel, case.want_parallel, "{}", case.name);
             assert_eq!(config.expansion_breadth, case.want_breadth, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn images_flag_parses_and_defaults_true() {
+        struct Case {
+            name: &'static str,
+            input: &'static str,
+            want: bool,
+        }
+        let cases = [
+            Case {
+                name: "absent flag defaults to true",
+                input: "",
+                want: true,
+            },
+            Case {
+                name: "explicit false disables image fetching",
+                input: "images = false",
+                want: false,
+            },
+        ];
+        for case in cases {
+            let config = parse_config(case.input).unwrap();
+            assert_eq!(config.images, case.want, "{}", case.name);
         }
     }
 

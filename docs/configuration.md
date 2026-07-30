@@ -19,6 +19,7 @@ engine = "claude"           # claude | cursor-agent | codex | opencode
 max_parallel = 4            # concurrent sub-searches, clamped to 1..=8
 expansion_breadth = 0       # 0 = use the mode default, otherwise clamped to 1..=8
 validate_links = true       # HTTP HEAD validation of every source
+images = true               # fetch and render answer images in the terminal
 animations = true           # staggered block reveal, chart growth, jump pulses
 engine_timeout_secs = 180   # per engine call
 

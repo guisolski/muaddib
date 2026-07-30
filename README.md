@@ -49,6 +49,8 @@ where **every claim carries a verified source link**.
 - Parallel fan-out with per-sub-query live progress
 - Structured answers: headings, paragraphs, lists, quotes, tables, terminal
   bar charts, and flow/timeline diagrams — all cited
+- Inline images from the searched pages, rendered in the terminal (kitty,
+  iTerm2, sixel — unicode half-blocks everywhere else)
 - Live link validation (✓ / ✗ 404) directly in the sources list
 - Config modal (`Ctrl+O`): answer language, engine, model, link validation, parallelism
 - Headless mode (`--print`) that emits the answer as JSON for scripting
@@ -133,15 +135,20 @@ flowchart LR
    quick factual questions come back fast. If the call fails, a deterministic
    per-mode fallback table keeps the search alive.
 2. **Fan-out** — sub-searches run concurrently (`buffer_unordered`, bounded by
-   `max_parallel`), each returning claims with exact source URLs.
+   `max_parallel`), each returning claims with exact source URLs and, when a
+   page shows a relevant image, its direct image URL.
 3. **Merge** — findings are deduplicated by normalized URL + claim.
 4. **Synthesize** — one final engine call compiles everything into a structured JSON
    answer in *your* language, validated against a JSON Schema — favoring compact
-   visual blocks and including a flow or timeline diagram of the answer's core
-   structure. Sources whose URLs never appeared in the findings are ejected
-   (anti-hallucination gate) and citations are renumbered in first-use order.
+   visual blocks, including a flow or timeline diagram of the answer's core
+   structure, and image blocks for findings worth showing. Sources — and image
+   URLs — that never appeared in the findings are ejected (anti-hallucination
+   gate) and citations are renumbered in first-use order.
 5. **Validate** — every source URL gets a parallel HTTP HEAD check; the sources list
    updates live with ✓ / ✗.
+6. **Fetch images** — surviving image URLs are downloaded and drawn in place with
+   the best graphics protocol the terminal offers (kitty, iTerm2, sixel), or
+   unicode half-blocks as a universal fallback.
 
 Read more in [`docs/`](docs/): [architecture](docs/architecture.md) ·
 [engines](docs/engines.md) · [search pipeline](docs/search-pipeline.md) ·
@@ -158,6 +165,7 @@ engine = "claude"           # claude | cursor-agent | codex | opencode
 max_parallel = 4            # concurrent sub-searches (1-8)
 expansion_breadth = 0       # 0 = use the mode default
 validate_links = true       # HTTP HEAD check on every source
+images = true               # fetch and render answer images in the terminal
 animations = true           # staggered reveal, chart growth, pulses
 engine_timeout_secs = 180
 
@@ -180,7 +188,6 @@ The project follows TDD with table-driven tests, a pure functional core (zero I/
 
 ## Roadmap
 
-- Inline images in the terminal (kitty/iTerm2/sixel via `ratatui-image`, `chafa` fallback)
 - Video results as external links
 - Search history and answer cache
 - More engines (adding one is a single table row — see [docs/engines.md](docs/engines.md))

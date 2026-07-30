@@ -1,5 +1,6 @@
 use crate::core::answer::{Answer, Block, ListItem, Source};
 use crate::pipeline::LinkStatus;
+use crate::tui::app::ImageFetch;
 use crate::tui::theme;
 use crate::tui::widgets::chart::bar_chart_lines;
 use crate::tui::widgets::diagram::diagram_lines;
@@ -21,12 +22,21 @@ pub enum DocSelection {
     Followup(usize),
 }
 
+pub const IMAGE_ROWS: usize = 12;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImageSlot {
+    pub url: String,
+    pub range: LineRange,
+}
+
 #[derive(Debug)]
 pub struct RenderedDoc {
     pub lines: Vec<Line<'static>>,
     pub block_ranges: Vec<LineRange>,
     pub source_ranges: Vec<LineRange>,
     pub followup_ranges: Vec<LineRange>,
+    pub image_slots: Vec<ImageSlot>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,6 +66,23 @@ pub fn content_height(area_height: u16) -> u16 {
     area_height.saturating_sub(1)
 }
 
+pub fn visible_rows(
+    range: LineRange,
+    scroll: u16,
+    viewport_lines: u16,
+) -> Option<(u16, u16, bool)> {
+    let top = i64::try_from(range.start).unwrap_or(i64::MAX) - i64::from(scroll);
+    let bottom = i64::try_from(range.end).unwrap_or(i64::MAX) - i64::from(scroll);
+    let visible_top = top.max(0);
+    let visible_bottom = bottom.min(i64::from(viewport_lines));
+    if visible_bottom <= visible_top {
+        return None;
+    }
+    let offset = u16::try_from(visible_top).unwrap_or(u16::MAX);
+    let height = u16::try_from(visible_bottom - visible_top).unwrap_or(u16::MAX);
+    Some((offset, height, top < 0))
+}
+
 pub fn scroll_into_view(scroll: u16, range: LineRange, viewport_lines: u16) -> u16 {
     let height = usize::from(viewport_lines);
     if height == 0 {
@@ -78,6 +105,7 @@ pub fn render_doc(
     links: &HashMap<u32, LinkStatus>,
     selection: DocSelection,
     anim: &DocAnim,
+    images: &HashMap<String, ImageFetch>,
 ) -> RenderedDoc {
     let text_width = usize::from(width).max(10);
     let mut lines = vec![
@@ -85,11 +113,15 @@ pub fn render_doc(
         Line::default(),
     ];
     let mut block_ranges = Vec::with_capacity(answer.blocks.len());
+    let mut image_slots = Vec::new();
     for (index, block) in answer.blocks.iter().enumerate() {
         let start = lines.len();
         if index < anim.revealed_blocks {
             let fraction = anim.growth.get(index).copied().unwrap_or(1.0);
-            append_block(&mut lines, block, text_width, width, fraction);
+            if let Some(slot) = append_block(&mut lines, block, text_width, width, fraction, images)
+            {
+                image_slots.push(slot);
+            }
             if let Some(overlay) = anim.block_overlays.get(index).copied().flatten() {
                 for line in &mut lines[start..] {
                     *line = std::mem::take(line).patch_style(overlay);
@@ -124,6 +156,7 @@ pub fn render_doc(
         block_ranges,
         source_ranges,
         followup_ranges,
+        image_slots,
     }
 }
 
@@ -133,7 +166,8 @@ fn append_block(
     text_width: usize,
     width: u16,
     growth: f64,
-) {
+    images: &HashMap<String, ImageFetch>,
+) -> Option<ImageSlot> {
     match block {
         Block::Heading { text, .. } => {
             lines.push(Line::styled(text.clone(), theme::heading()));
@@ -192,7 +226,61 @@ fn append_block(
                 lines.push(Line::raw(row));
             }
         }
+        Block::Image {
+            url,
+            caption,
+            source_ids,
+            ..
+        } => {
+            return Some(append_image(lines, url, caption, source_ids, images));
+        }
         Block::Unknown => {}
+    }
+    None
+}
+
+fn append_image(
+    lines: &mut Vec<Line<'static>>,
+    url: &str,
+    caption: &str,
+    source_ids: &[u32],
+    images: &HashMap<String, ImageFetch>,
+) -> ImageSlot {
+    lines.push(Line::from(vec![
+        Span::styled(image_caption(caption), theme::heading()),
+        citation_span(source_ids),
+    ]));
+    let start = lines.len();
+    lines.push(Line::styled(
+        image_status_row(images.get(url)),
+        theme::dim(),
+    ));
+    for _ in 1..IMAGE_ROWS {
+        lines.push(Line::raw(""));
+    }
+    ImageSlot {
+        url: url.to_string(),
+        range: LineRange {
+            start,
+            end: lines.len(),
+        },
+    }
+}
+
+fn image_caption(caption: &str) -> String {
+    let caption = caption.trim();
+    if caption.is_empty() {
+        "▨".to_string()
+    } else {
+        format!("▨ {caption}")
+    }
+}
+
+fn image_status_row(state: Option<&ImageFetch>) -> String {
+    match state {
+        None => "fetching image…".to_string(),
+        Some(ImageFetch::Failed) => "image unavailable".to_string(),
+        Some(ImageFetch::Ready(_)) => String::new(),
     }
 }
 
@@ -452,6 +540,7 @@ mod tests {
             links,
             selection,
             &DocAnim::settled(answer.blocks.len()),
+            &HashMap::new(),
         )
     }
 
@@ -514,6 +603,12 @@ mod tests {
                     source_ids: vec![1],
                     emphasis: Emphasis::None,
                 },
+                Block::Image {
+                    url: "https://one.example/figure.png".to_string(),
+                    caption: "Figure".to_string(),
+                    source_ids: vec![1],
+                    emphasis: Emphasis::None,
+                },
                 Block::Unknown,
             ],
             sources: vec![
@@ -545,7 +640,7 @@ mod tests {
             Case {
                 name: "full answer",
                 answer: full_answer(),
-                want_empty: &[7],
+                want_empty: &[8],
             },
             Case {
                 name: "unknown block yields empty range",
@@ -756,6 +851,8 @@ mod tests {
         assert!(joined.contains("  one call"));
         assert!(joined.contains("▼"));
         assert!(joined.contains("● Search"));
+        assert!(joined.contains("▨ Figure [1]"));
+        assert!(joined.contains("fetching image…"));
         assert!(joined.contains("[1] ✓ One — https://one.example (en)"));
         assert!(joined.contains("[2] ✗ 404 Two — https://two.example (en)"));
         assert!(joined.contains("→ next"));
@@ -802,7 +899,14 @@ mod tests {
             revealed_blocks: 1,
             ..DocAnim::settled(answer.blocks.len())
         };
-        let doc = render_doc(&answer, 60, &HashMap::new(), DocSelection::None, &partial);
+        let doc = render_doc(
+            &answer,
+            60,
+            &HashMap::new(),
+            DocSelection::None,
+            &partial,
+            &HashMap::new(),
+        );
         let joined = doc.lines.iter().map(text_of).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("Section"));
         assert!(!joined.contains("A claim with backing."));
@@ -821,10 +925,159 @@ mod tests {
         let answer = full_answer();
         let mut anim = DocAnim::settled(answer.blocks.len());
         anim.growth[6] = 0.5;
-        let doc = render_doc(&answer, 60, &HashMap::new(), DocSelection::None, &anim);
+        let doc = render_doc(
+            &answer,
+            60,
+            &HashMap::new(),
+            DocSelection::None,
+            &anim,
+            &HashMap::new(),
+        );
         let joined = doc.lines.iter().map(text_of).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("● Expand"));
         assert!(!joined.contains("● Search"));
+    }
+
+    #[test]
+    fn image_blocks_render_caption_and_a_fixed_placeholder() {
+        struct Case {
+            name: &'static str,
+            images: HashMap<String, ImageFetch>,
+            want_first_row: &'static str,
+        }
+        let url = "https://one.example/figure.png";
+        let cases = [
+            Case {
+                name: "pending fetch shows progress",
+                images: HashMap::new(),
+                want_first_row: "fetching image…",
+            },
+            Case {
+                name: "failed fetch shows a note",
+                images: HashMap::from([(url.to_string(), ImageFetch::Failed)]),
+                want_first_row: "image unavailable",
+            },
+            Case {
+                name: "ready image leaves blank rows for the overlay",
+                images: HashMap::from([(url.to_string(), ImageFetch::Ready(vec![1]))]),
+                want_first_row: "",
+            },
+        ];
+        let answer = full_answer();
+        for case in cases {
+            let doc = render_doc(
+                &answer,
+                60,
+                &HashMap::new(),
+                DocSelection::None,
+                &DocAnim::settled(answer.blocks.len()),
+                &case.images,
+            );
+            assert_eq!(doc.image_slots.len(), 1, "{}", case.name);
+            let slot = &doc.image_slots[0];
+            assert_eq!(slot.url, url, "{}", case.name);
+            assert_eq!(
+                slot.range.end - slot.range.start,
+                IMAGE_ROWS,
+                "{}",
+                case.name
+            );
+            assert!(
+                text_of(&doc.lines[slot.range.start - 1]).starts_with("▨ Figure"),
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                text_of(&doc.lines[slot.range.start]).trim(),
+                case.want_first_row,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn image_slots_exist_only_for_revealed_blocks() {
+        let answer = full_answer();
+        let partial = DocAnim {
+            revealed_blocks: 1,
+            ..DocAnim::settled(answer.blocks.len())
+        };
+        let doc = render_doc(
+            &answer,
+            60,
+            &HashMap::new(),
+            DocSelection::None,
+            &partial,
+            &HashMap::new(),
+        );
+        assert!(doc.image_slots.is_empty());
+        let settled = render_settled(&answer, 60, &HashMap::new(), DocSelection::None);
+        assert_eq!(settled.image_slots.len(), 1);
+        assert!(settled.image_slots[0].range.end <= settled.lines.len());
+    }
+
+    #[test]
+    fn visible_rows_clips_ranges_to_the_viewport() {
+        struct Case {
+            name: &'static str,
+            range: LineRange,
+            scroll: u16,
+            viewport_lines: u16,
+            want: Option<(u16, u16, bool)>,
+        }
+        let cases = [
+            Case {
+                name: "fully visible keeps its offset",
+                range: LineRange { start: 5, end: 8 },
+                scroll: 0,
+                viewport_lines: 20,
+                want: Some((5, 3, false)),
+            },
+            Case {
+                name: "scrolled past the top clips from above",
+                range: LineRange { start: 5, end: 8 },
+                scroll: 6,
+                viewport_lines: 20,
+                want: Some((0, 2, true)),
+            },
+            Case {
+                name: "overflowing the bottom clips from below",
+                range: LineRange { start: 5, end: 8 },
+                scroll: 0,
+                viewport_lines: 6,
+                want: Some((5, 1, false)),
+            },
+            Case {
+                name: "fully above the viewport disappears",
+                range: LineRange { start: 5, end: 8 },
+                scroll: 10,
+                viewport_lines: 20,
+                want: None,
+            },
+            Case {
+                name: "fully below the viewport disappears",
+                range: LineRange { start: 5, end: 8 },
+                scroll: 0,
+                viewport_lines: 5,
+                want: None,
+            },
+            Case {
+                name: "zero height viewport shows nothing",
+                range: LineRange { start: 0, end: 1 },
+                scroll: 0,
+                viewport_lines: 0,
+                want: None,
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                visible_rows(case.range, case.scroll, case.viewport_lines),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
     }
 
     #[test]

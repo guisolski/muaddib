@@ -37,7 +37,7 @@ pub async fn validate_links(sources: &[Source], tx: &Sender<SearchEvent>) {
         .await;
 }
 
-fn build_client() -> Option<reqwest::Client> {
+pub(crate) fn build_client() -> Option<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))

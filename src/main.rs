@@ -86,7 +86,10 @@ async fn run_headless(cli: &Cli, config: &Config, statuses: &[EngineStatus]) -> 
         .expect("an available engine has a resolved path")
         .with_model(config.model_override(status.spec.name).map(str::to_string));
     let mode = cli.mode.unwrap_or(Mode::General);
-    let request = SearchRequest::from_config(query, mode, config);
+    let request = SearchRequest {
+        fetch_images: false,
+        ..SearchRequest::from_config(query, mode, config)
+    };
     stream_search_to_stdio(Arc::new(engine), request).await
 }
 
@@ -141,6 +144,7 @@ fn report_progress(event: &SearchEvent) {
         SearchEvent::Completed
         | SearchEvent::SubQueryStarted { .. }
         | SearchEvent::AnswerReady(_)
+        | SearchEvent::ImageFetched { .. }
         | SearchEvent::Failed(_) => {}
     }
 }

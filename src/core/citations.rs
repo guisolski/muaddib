@@ -10,6 +10,8 @@ pub struct Finding {
     pub source_url: String,
     #[serde(default)]
     pub lang: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub image_url: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +106,23 @@ pub fn allowed_urls(merged: &MergedFindings) -> BTreeSet<String> {
         .collect()
 }
 
+pub fn allowed_image_urls(merged: &MergedFindings) -> BTreeSet<String> {
+    merged
+        .findings
+        .iter()
+        .map(|finding| normalize_url(&finding.image_url))
+        .filter(|image_url| is_valid_source_url(image_url))
+        .collect()
+}
+
+pub fn eject_unknown_images(mut answer: Answer, allowed: &BTreeSet<String>) -> Answer {
+    answer.blocks.retain(|block| match block {
+        Block::Image { url, .. } => allowed.contains(&normalize_url(url)),
+        _ => true,
+    });
+    answer
+}
+
 pub fn renumber_sources(mut answer: Answer, allowed: &BTreeSet<String>) -> Answer {
     let valid_by_old_id = index_allowed_sources(&answer.sources, allowed);
     let first_use_order = referenced_ids_in_first_use_order(&answer.blocks, &valid_by_old_id);
@@ -176,7 +195,8 @@ fn block_source_id_slots(blocks: &[Block]) -> Vec<&Vec<u32>> {
             | Block::Quote { source_ids, .. }
             | Block::Table { source_ids, .. }
             | Block::Chart { source_ids, .. }
-            | Block::Diagram { source_ids, .. } => slots.push(source_ids),
+            | Block::Diagram { source_ids, .. }
+            | Block::Image { source_ids, .. } => slots.push(source_ids),
             Block::List { items, .. } => {
                 slots.extend(items.iter().map(|item| &item.source_ids));
             }
@@ -194,7 +214,8 @@ fn block_source_id_slots_mut(blocks: &mut [Block]) -> Vec<&mut Vec<u32>> {
             | Block::Quote { source_ids, .. }
             | Block::Table { source_ids, .. }
             | Block::Chart { source_ids, .. }
-            | Block::Diagram { source_ids, .. } => slots.push(source_ids),
+            | Block::Diagram { source_ids, .. }
+            | Block::Image { source_ids, .. } => slots.push(source_ids),
             Block::List { items, .. } => {
                 slots.extend(items.iter_mut().map(|item| &mut item.source_ids));
             }
@@ -215,6 +236,14 @@ mod tests {
             source_title: "t".to_string(),
             source_url: url.to_string(),
             lang: "en".to_string(),
+            image_url: String::new(),
+        }
+    }
+
+    fn finding_with_image(claim: &str, url: &str, image_url: &str) -> Finding {
+        Finding {
+            image_url: image_url.to_string(),
+            ..finding(claim, url)
         }
     }
 
@@ -517,6 +546,106 @@ mod tests {
         };
         assert_eq!(source_ids, &vec![1, 2]);
         assert_eq!(renumbered.sources[0].url, "https://b.example");
+    }
+
+    #[test]
+    fn allowed_image_urls_collects_only_valid_finding_images() {
+        let results = [sub_result(
+            "q",
+            vec![
+                finding_with_image(
+                    "c1",
+                    "https://page.example/a",
+                    "HTTPS://Img.Example/photo.png#frag",
+                ),
+                finding_with_image("c2", "https://page.example/b", "not a url"),
+                finding("c3", "https://page.example/c"),
+            ],
+        )];
+        let merged = merge_sub_results(&results);
+        assert_eq!(
+            allowed_image_urls(&merged),
+            BTreeSet::from(["https://img.example/photo.png".to_string()])
+        );
+    }
+
+    #[test]
+    fn eject_unknown_images_keeps_only_findings_backed_image_blocks() {
+        struct Case {
+            name: &'static str,
+            url: &'static str,
+            want_kept: bool,
+        }
+        let cases = [
+            Case {
+                name: "image url from the findings survives",
+                url: "HTTPS://IMG.EXAMPLE/photo.png",
+                want_kept: true,
+            },
+            Case {
+                name: "invented image url is ejected",
+                url: "https://img.example/never-found.png",
+                want_kept: false,
+            },
+            Case {
+                name: "empty image url is ejected",
+                url: "",
+                want_kept: false,
+            },
+        ];
+        let allowed = BTreeSet::from(["https://img.example/photo.png".to_string()]);
+        for case in cases {
+            let answer = Answer {
+                blocks: vec![
+                    Block::Paragraph {
+                        text: "kept".to_string(),
+                        source_ids: vec![1],
+                        emphasis: Emphasis::None,
+                    },
+                    Block::Image {
+                        url: case.url.to_string(),
+                        caption: "c".to_string(),
+                        source_ids: vec![1],
+                        emphasis: Emphasis::None,
+                    },
+                ],
+                ..Answer::default()
+            };
+            let ejected = eject_unknown_images(answer, &allowed);
+            let want_blocks = if case.want_kept { 2 } else { 1 };
+            assert_eq!(ejected.blocks.len(), want_blocks, "{}", case.name);
+            assert!(
+                matches!(&ejected.blocks[0], Block::Paragraph { text, .. } if text == "kept"),
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn renumber_remaps_image_source_ids() {
+        let answer = Answer {
+            blocks: vec![Block::Image {
+                url: "https://img.example/x.png".to_string(),
+                caption: "c".to_string(),
+                source_ids: vec![9, 4],
+                emphasis: Emphasis::None,
+            }],
+            sources: vec![
+                source(4, "https://a.example"),
+                source(9, "https://b.example"),
+            ],
+            ..Answer::default()
+        };
+        let allowed = BTreeSet::from([
+            "https://a.example".to_string(),
+            "https://b.example".to_string(),
+        ]);
+        let renumbered = renumber_sources(answer, &allowed);
+        let Block::Image { source_ids, .. } = &renumbered.blocks[0] else {
+            panic!("expected an image block");
+        };
+        assert_eq!(source_ids, &vec![1, 2]);
     }
 
     #[test]

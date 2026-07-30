@@ -1,8 +1,8 @@
 use crate::core::mode::MODES;
 use crate::pipeline::SearchEvent;
 use crate::tui::app::{
-    App, ConfigField, ConfigForm, Focus, LANGUAGES, Overlay, Pulse, Screen, SubQueryState,
-    Viewport, configured_model_idx, model_choices,
+    App, ConfigField, ConfigForm, Focus, ImageFetch, LANGUAGES, Overlay, Pulse, Screen,
+    SubQueryState, Viewport, configured_model_idx, model_choices,
 };
 use crate::tui::event::{AppEvent, Command};
 use crate::tui::keymap::{Action, Scope, resolve};
@@ -254,7 +254,14 @@ fn ensure_selection_visible(app: &mut App) {
     };
     let width = doc::content_width(app.viewport.width);
     let settled = DocAnim::settled(answer.blocks.len());
-    let rendered = doc::render_doc(answer, width, &app.links, DocSelection::None, &settled);
+    let rendered = doc::render_doc(
+        answer,
+        width,
+        &app.links,
+        DocSelection::None,
+        &settled,
+        &app.images,
+    );
     let range = match app.focus {
         Focus::Body => None,
         Focus::Sources(index) => rendered.source_ranges.get(index).copied(),
@@ -272,7 +279,14 @@ fn max_scroll(app: &App) -> u16 {
     };
     let width = doc::content_width(app.viewport.width);
     let settled = DocAnim::settled(answer.blocks.len());
-    let rendered = doc::render_doc(answer, width, &app.links, DocSelection::None, &settled);
+    let rendered = doc::render_doc(
+        answer,
+        width,
+        &app.links,
+        DocSelection::None,
+        &settled,
+        &app.images,
+    );
     let total = u16::try_from(rendered.lines.len()).unwrap_or(u16::MAX);
     total.saturating_sub(doc::content_height(app.viewport.height))
 }
@@ -447,6 +461,10 @@ fn apply_search_event(app: &mut App, event: SearchEvent) -> Option<Command> {
         }
         SearchEvent::LinkChecked { source_id, status } => {
             app.links.insert(source_id, status);
+        }
+        SearchEvent::ImageFetched { url, bytes } => {
+            app.images
+                .insert(url, bytes.map_or(ImageFetch::Failed, ImageFetch::Ready));
         }
         SearchEvent::Completed => app.synthesizing = false,
         SearchEvent::Failed(message) => {
@@ -918,6 +936,35 @@ mod tests {
         assert_eq!(app.screen, Screen::Results);
         assert_eq!(app.focus, Focus::Body);
         assert!(!app.synthesizing);
+    }
+
+    #[test]
+    fn image_fetch_events_store_bytes_or_failures_until_the_next_search() {
+        let mut app = app();
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::ImageFetched {
+                url: "https://img.example/a.png".to_string(),
+                bytes: Some(vec![1, 2, 3]),
+            }),
+        );
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::ImageFetched {
+                url: "https://img.example/b.png".to_string(),
+                bytes: None,
+            }),
+        );
+        assert_eq!(
+            app.images.get("https://img.example/a.png"),
+            Some(&ImageFetch::Ready(vec![1, 2, 3]))
+        );
+        assert_eq!(
+            app.images.get("https://img.example/b.png"),
+            Some(&ImageFetch::Failed)
+        );
+        app.begin_search();
+        assert!(app.images.is_empty());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # Search pipeline
 
-`pipeline/search.rs` orchestrates five stages. All planning, merging, and
+`pipeline/search.rs` orchestrates six stages. All planning, merging, and
 citation logic is pure (`src/core/`); the pipeline only sequences engine calls
 and emits events.
 
@@ -37,10 +37,11 @@ Each sub-search prompt demands findings with exact URLs:
 
 ```json
 {"summary": "...", "findings": [{"claim": "...", "source_title": "...",
-  "source_url": "https://...", "lang": "..."}]}
+  "source_url": "https://...", "lang": "...", "image_url": "https://..."}]}
 ```
 
-A failed sub-query is dropped (with a `SubQueryFinished { ok: false }` event);
+`image_url` is optional: the direct URL of a relevant image (photo, chart,
+figure) on the consulted page. A failed sub-query is dropped (with a `SubQueryFinished { ok: false }` event);
 the pipeline continues as long as at least one succeeds and produces findings.
 
 ### 3. Merge (pure)
@@ -59,14 +60,17 @@ configured language, citing `source_ids` on every block, using **only** URLs
 present in the findings. The prompt favors compact visual blocks — short
 paragraphs, lists, tables, charts — and asks for a `diagram` block (`flow` for
 processes and causal chains, `timeline` for chronologies) that visualizes the
-answer's core structure.
+answer's core structure, plus an `image` block (url + caption) when a finding
+carries an `image_url` worth showing.
 
-Then `renumber_sources` (pure) enforces the contract:
+Then two pure gates enforce the contract. `eject_unknown_images` removes every
+`image` block whose normalized URL is not among the findings' `image_url`
+values — the same anti-hallucination rule sources get. `renumber_sources` then:
 
-- sources whose normalized URL is absent from the findings are **ejected**
+- ejects sources whose normalized URL is absent from the findings
   (anti-hallucination gate),
-- dangling `source_ids` are dropped, duplicates deduplicated,
-- sources are renumbered 1..n in first-use order and unused ones pruned.
+- drops dangling `source_ids` and deduplicates repeats,
+- renumbers sources 1..n in first-use order and prunes unused ones.
 
 ### 5. Validate links
 
@@ -75,6 +79,16 @@ source URL gets an HTTP HEAD request — 8 concurrent, 8s timeout, up to 5
 redirects; 403/405/501 retry as `GET` with `Range: bytes=0-0` (some servers
 reject HEAD). Results stream to the UI as `LinkChecked` events: ✓, ✗ 404, or
 ✗ unreachable.
+
+### 6. Fetch images
+
+With `images = true` (default) every surviving `image` block's URL is
+downloaded — 4 concurrent GETs, 5 MB cap — and streamed to the UI as
+`ImageFetched` events carrying the raw bytes (or `None` on failure). The TUI
+decodes and renders them with the terminal's best graphics protocol (kitty,
+iTerm2, sixel) and falls back to unicode half-blocks everywhere else; a failed
+fetch degrades to an "image unavailable" note. Headless `--print` runs skip
+this stage — the JSON answer carries the image URLs themselves.
 
 ## Event protocol
 
@@ -86,6 +100,7 @@ enum SearchEvent {
     SynthesisStarted,
     AnswerReady(Box<Answer>),
     LinkChecked { source_id, status },
+    ImageFetched { url, bytes },
     Completed,
     Failed(String),
 }
@@ -105,4 +120,6 @@ that is all Esc does.
 | No findings with usable URLs | `Failed("…no findings with usable sources")` |
 | Synthesis fails / invalid JSON | `Failed` with the reason |
 | Synthesis invents a URL | source ejected, citation dropped |
+| Synthesis invents an image URL | image block removed from the answer |
 | Link check fails | source marked ✗, answer unaffected |
+| Image fetch fails or is not an image | "image unavailable" note, answer unaffected |

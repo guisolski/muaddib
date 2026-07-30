@@ -1,7 +1,7 @@
 use crate::core::answer::{ANSWER_SCHEMA, Answer, parse_answer};
 use crate::core::citations::{
-    MergedFindings, SubResult, allowed_urls, merge_sub_results, parse_sub_response,
-    renumber_sources,
+    MergedFindings, SubResult, allowed_image_urls, allowed_urls, eject_unknown_images,
+    merge_sub_results, parse_sub_response, renumber_sources,
 };
 use crate::core::config::Config;
 use crate::core::extract::extract_json;
@@ -27,6 +27,7 @@ pub struct SearchRequest {
     pub max_parallel: usize,
     pub engine_timeout: Duration,
     pub validate_links: bool,
+    pub fetch_images: bool,
 }
 
 impl SearchRequest {
@@ -39,6 +40,7 @@ impl SearchRequest {
             max_parallel: usize::from(config.max_parallel),
             engine_timeout: Duration::from_secs(config.engine_timeout_secs),
             validate_links: config.validate_links,
+            fetch_images: config.images,
         }
     }
 }
@@ -83,6 +85,7 @@ async fn run_stages(
     let answer = synthesis_stage(engine, &plan, &merged, request).await?;
     send(tx, SearchEvent::AnswerReady(Box::new(answer.clone()))).await;
     link_validation_stage(&answer, request, tx).await;
+    image_fetch_stage(&answer, request, tx).await;
     Ok(())
 }
 
@@ -189,6 +192,7 @@ async fn synthesis_stage(
         .ok_or_else(|| "synthesis returned no parsable JSON".to_string())?;
     let answer = parse_answer(value)
         .map_err(|error| format!("synthesis JSON did not match the answer schema: {error}"))?;
+    let answer = eject_unknown_images(answer, &allowed_image_urls(merged));
     Ok(renumber_sources(answer, &allowed_urls(merged)))
 }
 
@@ -205,6 +209,25 @@ async fn link_validation_stage(
 
 #[cfg(not(feature = "link-validation"))]
 async fn link_validation_stage(
+    _answer: &Answer,
+    _request: &SearchRequest,
+    _tx: &mpsc::Sender<SearchEvent>,
+) {
+}
+
+#[cfg(feature = "link-validation")]
+async fn image_fetch_stage(
+    answer: &Answer,
+    request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
+) {
+    if request.fetch_images {
+        crate::pipeline::images::fetch_images(answer, tx).await;
+    }
+}
+
+#[cfg(not(feature = "link-validation"))]
+async fn image_fetch_stage(
     _answer: &Answer,
     _request: &SearchRequest,
     _tx: &mpsc::Sender<SearchEvent>,
@@ -257,7 +280,7 @@ mod tests {
                 ]}"#
                     .to_string(),
                 SUB_SEARCH_MARKER => r#"{"summary":"found things","findings":[
-                    {"claim":"claim one","source_title":"One","source_url":"https://one.example/a","lang":"en"},
+                    {"claim":"claim one","source_title":"One","source_url":"https://one.example/a","lang":"en","image_url":"https://one.example/figure.png"},
                     {"claim":"claim two","source_title":"Two","source_url":"https://two.example/b","lang":"en"}
                 ]}"#
                     .to_string(),
@@ -266,7 +289,9 @@ mod tests {
                     "language":"en",
                     "blocks":[
                         {"type":"paragraph","text":"real claim","source_ids":[1,2]},
-                        {"type":"paragraph","text":"hallucinated claim","source_ids":[3]}
+                        {"type":"paragraph","text":"hallucinated claim","source_ids":[3]},
+                        {"type":"image","url":"https://one.example/figure.png","caption":"real figure","source_ids":[1]},
+                        {"type":"image","url":"https://invented.example/fake.png","caption":"invented figure","source_ids":[2]}
                     ],
                     "sources":[
                         {"id":1,"title":"One","url":"https://one.example/a","lang":"en"},
@@ -315,6 +340,7 @@ mod tests {
             max_parallel: 4,
             engine_timeout: Duration::from_secs(5),
             validate_links: false,
+            fetch_images: false,
         }
     }
 
@@ -384,6 +410,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hallucinated_image_blocks_are_ejected() {
+        let events = collect_events(FakeEngine::reliable()).await;
+        let answer = events
+            .iter()
+            .find_map(|event| match event {
+                SearchEvent::AnswerReady(answer) => Some(answer),
+                _ => None,
+            })
+            .expect("answer produced");
+        let image_urls: Vec<&str> = answer
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                crate::core::answer::Block::Image { url, .. } => Some(url.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(image_urls, vec!["https://one.example/figure.png"]);
+    }
+
+    #[tokio::test]
     async fn simple_complexity_runs_a_single_sub_search() {
         let events = collect_events(FakeEngine::rating_simple()).await;
         let started = events
@@ -442,5 +489,6 @@ mod tests {
         assert_eq!(request.max_parallel, 2);
         assert_eq!(request.engine_timeout, Duration::from_secs(30));
         assert!(!request.validate_links);
+        assert!(request.fetch_images);
     }
 }

@@ -89,7 +89,8 @@ fn block_emphasis(block: &Block) -> Emphasis {
         | Block::Quote { emphasis, .. }
         | Block::Table { emphasis, .. }
         | Block::Chart { emphasis, .. }
-        | Block::Diagram { emphasis, .. } => *emphasis,
+        | Block::Diagram { emphasis, .. }
+        | Block::Image { emphasis, .. } => *emphasis,
         Block::Unknown => Emphasis::None,
     }
 }

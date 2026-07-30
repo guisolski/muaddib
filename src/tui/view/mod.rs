@@ -8,7 +8,7 @@ pub mod searching;
 use crate::tui::app::{App, Overlay, Screen};
 use ratatui::Frame;
 
-pub fn draw(frame: &mut Frame, app: &App) {
+pub fn draw(frame: &mut Frame, app: &mut App) {
     match app.screen {
         Screen::Home => home::draw(frame, app),
         Screen::Searching => searching::draw(frame, app),

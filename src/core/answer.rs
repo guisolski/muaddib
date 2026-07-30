@@ -72,6 +72,15 @@ pub enum Block {
         #[serde(default)]
         emphasis: Emphasis,
     },
+    Image {
+        url: String,
+        #[serde(default)]
+        caption: String,
+        #[serde(default)]
+        source_ids: Vec<u32>,
+        #[serde(default)]
+        emphasis: Emphasis,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -284,6 +293,17 @@ pub const ANSWER_SCHEMA: &str = r##"{
             "source_ids": {"$ref": "#/definitions/source_ids"},
             "emphasis": {"$ref": "#/definitions/emphasis"}
           }
+        },
+        {
+          "type": "object",
+          "required": ["type", "url", "source_ids"],
+          "properties": {
+            "type": {"const": "image"},
+            "url": {"type": "string"},
+            "caption": {"type": "string"},
+            "source_ids": {"$ref": "#/definitions/source_ids"},
+            "emphasis": {"$ref": "#/definitions/emphasis"}
+          }
         }
       ]
     }
@@ -326,6 +346,12 @@ mod tests {
                         label: "Expand".to_string(),
                         detail: "one engine call".to_string(),
                     }],
+                    source_ids: vec![1],
+                    emphasis: Emphasis::None,
+                },
+                Block::Image {
+                    url: "https://example.com/figure.png".to_string(),
+                    caption: "Figure".to_string(),
                     source_ids: vec![1],
                     emphasis: Emphasis::None,
                 },
@@ -517,6 +543,50 @@ mod tests {
             };
             assert_eq!(diagram_type, case.want_type, "{}", case.name);
             assert_eq!(items[0].detail, case.want_detail, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn image_blocks_parse_with_tolerant_fields() {
+        struct Case {
+            name: &'static str,
+            input: serde_json::Value,
+            want_caption: &'static str,
+            want_ids: &'static [u32],
+        }
+        let cases = [
+            Case {
+                name: "full image block",
+                input: json!({
+                    "type": "image",
+                    "url": "https://img.example/chart.png",
+                    "caption": "Installed capacity",
+                    "source_ids": [2]
+                }),
+                want_caption: "Installed capacity",
+                want_ids: &[2],
+            },
+            Case {
+                name: "caption and source_ids default",
+                input: json!({"type": "image", "url": "https://img.example/photo.jpg"}),
+                want_caption: "",
+                want_ids: &[],
+            },
+        ];
+        for case in cases {
+            let block: Block = serde_json::from_value(case.input.clone()).unwrap();
+            let Block::Image {
+                url,
+                caption,
+                source_ids,
+                ..
+            } = block
+            else {
+                panic!("{}", case.name);
+            };
+            assert!(url.starts_with("https://img.example/"), "{}", case.name);
+            assert_eq!(caption, case.want_caption, "{}", case.name);
+            assert_eq!(source_ids, case.want_ids, "{}", case.name);
         }
     }
 

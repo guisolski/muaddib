@@ -1,3 +1,5 @@
+#[cfg(feature = "link-validation")]
+pub mod images;
 pub mod search;
 #[cfg(feature = "link-validation")]
 pub mod validate;
@@ -20,6 +22,7 @@ pub enum SearchEvent {
     SynthesisStarted,
     AnswerReady(Box<Answer>),
     LinkChecked { source_id: u32, status: LinkStatus },
+    ImageFetched { url: String, bytes: Option<Vec<u8>> },
     Completed,
     Failed(String),
 }
