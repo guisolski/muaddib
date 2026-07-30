@@ -1,0 +1,195 @@
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+pub const MIN_PARALLEL: u8 = 1;
+pub const MAX_PARALLEL: u8 = 8;
+pub const MAX_BREADTH: u8 = 8;
+pub const MODE_DEFAULT_BREADTH: u8 = 0;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Config {
+    pub language: String,
+    pub engine: String,
+    pub max_parallel: u8,
+    pub expansion_breadth: u8,
+    pub validate_links: bool,
+    pub engine_timeout_secs: u64,
+    pub engines: BTreeMap<String, EngineOverride>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct EngineOverride {
+    pub bin: Option<PathBuf>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            language: "pt-BR".to_string(),
+            engine: "claude".to_string(),
+            max_parallel: 4,
+            expansion_breadth: MODE_DEFAULT_BREADTH,
+            validate_links: true,
+            engine_timeout_secs: 180,
+            engines: BTreeMap::new(),
+        }
+    }
+}
+
+impl Config {
+    pub fn bin_override(&self, engine_name: &str) -> Option<&Path> {
+        self.engines
+            .get(engine_name)
+            .and_then(|entry| entry.bin.as_deref())
+    }
+}
+
+pub fn parse_config(toml_text: &str) -> Result<Config, toml::de::Error> {
+    toml::from_str(toml_text).map(clamp_config)
+}
+
+pub fn clamp_config(mut config: Config) -> Config {
+    config.max_parallel = config.max_parallel.clamp(MIN_PARALLEL, MAX_PARALLEL);
+    config.expansion_breadth = config.expansion_breadth.min(MAX_BREADTH);
+    config
+}
+
+pub fn to_toml(config: &Config) -> String {
+    toml::to_string_pretty(config).unwrap_or_default()
+}
+
+pub fn config_path(home: &Path, xdg_config_home: Option<&Path>) -> PathBuf {
+    xdg_config_home
+        .map_or_else(|| home.join(".config"), Path::to_path_buf)
+        .join("faro")
+        .join("config.toml")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_file_yields_defaults() {
+        let config = parse_config("").unwrap();
+        assert_eq!(config, Config::default());
+    }
+
+    #[test]
+    fn partial_file_keeps_defaults_for_missing_keys() {
+        let config = parse_config("language = \"en\"").unwrap();
+        assert_eq!(config.language, "en");
+        assert_eq!(config.engine, Config::default().engine);
+        assert_eq!(config.max_parallel, Config::default().max_parallel);
+    }
+
+    #[test]
+    fn unknown_keys_are_tolerated() {
+        let config = parse_config("future_flag = true\nlanguage = \"es\"").unwrap();
+        assert_eq!(config.language, "es");
+    }
+
+    #[test]
+    fn out_of_range_values_are_clamped() {
+        struct Case {
+            name: &'static str,
+            input: &'static str,
+            want_parallel: u8,
+            want_breadth: u8,
+        }
+        let cases = [
+            Case {
+                name: "parallel too high",
+                input: "max_parallel = 99",
+                want_parallel: MAX_PARALLEL,
+                want_breadth: MODE_DEFAULT_BREADTH,
+            },
+            Case {
+                name: "parallel zero",
+                input: "max_parallel = 0",
+                want_parallel: MIN_PARALLEL,
+                want_breadth: MODE_DEFAULT_BREADTH,
+            },
+            Case {
+                name: "breadth too high",
+                input: "expansion_breadth = 50",
+                want_parallel: 4,
+                want_breadth: MAX_BREADTH,
+            },
+            Case {
+                name: "breadth zero means mode default",
+                input: "expansion_breadth = 0",
+                want_parallel: 4,
+                want_breadth: MODE_DEFAULT_BREADTH,
+            },
+        ];
+        for case in cases {
+            let config = parse_config(case.input).unwrap();
+            assert_eq!(config.max_parallel, case.want_parallel, "{}", case.name);
+            assert_eq!(config.expansion_breadth, case.want_breadth, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn malformed_toml_is_an_error() {
+        assert!(parse_config("language = ").is_err());
+    }
+
+    #[test]
+    fn engine_bin_override_round_trips() {
+        let text = "[engines.claude]\nbin = \"/custom/claude\"";
+        let config = parse_config(text).unwrap();
+        assert_eq!(
+            config.bin_override("claude"),
+            Some(Path::new("/custom/claude"))
+        );
+        assert_eq!(config.bin_override("codex"), None);
+    }
+
+    #[test]
+    fn config_serializes_and_parses_back_identically() {
+        let config = Config {
+            language: "fr".to_string(),
+            engines: BTreeMap::from([(
+                "claude".to_string(),
+                EngineOverride {
+                    bin: Some(PathBuf::from("/tmp/fake")),
+                },
+            )]),
+            ..Config::default()
+        };
+        let round_tripped = parse_config(&to_toml(&config)).unwrap();
+        assert_eq!(round_tripped, config);
+    }
+
+    #[test]
+    fn config_path_prefers_xdg_config_home() {
+        struct Case {
+            name: &'static str,
+            home: &'static str,
+            xdg: Option<&'static str>,
+            want: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "xdg set",
+                home: "/home/user",
+                xdg: Some("/home/user/.cfg"),
+                want: "/home/user/.cfg/faro/config.toml",
+            },
+            Case {
+                name: "xdg unset",
+                home: "/home/user",
+                xdg: None,
+                want: "/home/user/.config/faro/config.toml",
+            },
+        ];
+        for case in cases {
+            let got = config_path(Path::new(case.home), case.xdg.map(Path::new));
+            assert_eq!(got, PathBuf::from(case.want), "{}", case.name);
+        }
+    }
+}
