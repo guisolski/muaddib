@@ -1,11 +1,11 @@
 [package]
-name = "faro"
+name = "muaddib"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.93"
 description = "AI-powered meta-search for your terminal"
 license = "MIT"
-repository = "https://github.com/guisolski/faro"
+repository = "https://github.com/guisolski/muaddib"
 readme = "README.md"
 keywords = ["tui", "search", "ai", "terminal", "ratatui"]
 categories = ["command-line-utilities"]

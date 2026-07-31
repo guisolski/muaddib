@@ -48,7 +48,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 }
 
 fn wordmark_line() -> Paragraph<'static> {
-    Paragraph::new(Line::styled("▲ faro", theme::title())).centered()
+    Paragraph::new(Line::styled("▲ muaddib", theme::title())).centered()
 }
 
 fn draw_input(frame: &mut Frame, app: &App, row: Rect) {

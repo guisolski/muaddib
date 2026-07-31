@@ -3,10 +3,10 @@ use crate::core::citations::MergedFindings;
 use crate::core::mode::ModeSpec;
 use crate::core::plan::{SearchPlan, SubQuery};
 
-pub const EXPANSION_MARKER: &str = "FARO:EXPAND";
-pub const SUB_SEARCH_MARKER: &str = "FARO:SUBSEARCH";
-pub const SYNTHESIS_MARKER: &str = "FARO:SYNTH";
-pub const FAST_MARKER: &str = "FARO:FAST";
+pub const EXPANSION_MARKER: &str = "MUADDIB:EXPAND";
+pub const SUB_SEARCH_MARKER: &str = "MUADDIB:SUBSEARCH";
+pub const SYNTHESIS_MARKER: &str = "MUADDIB:SYNTH";
+pub const FAST_MARKER: &str = "MUADDIB:FAST";
 
 pub fn fast_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, inline_schema: bool) -> String {
     format!(

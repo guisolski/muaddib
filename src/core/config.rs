@@ -103,7 +103,7 @@ pub fn to_toml(config: &Config) -> String {
 pub fn config_path(home: &Path, xdg_config_home: Option<&Path>) -> PathBuf {
     xdg_config_home
         .map_or_else(|| home.join(".config"), Path::to_path_buf)
-        .join("faro")
+        .join("muaddib")
         .join("config.toml")
 }
 
@@ -386,13 +386,13 @@ mod tests {
                 name: "xdg set",
                 home: "/home/user",
                 xdg: Some("/home/user/.cfg"),
-                want: "/home/user/.cfg/faro/config.toml",
+                want: "/home/user/.cfg/muaddib/config.toml",
             },
             Case {
                 name: "xdg unset",
                 home: "/home/user",
                 xdg: None,
-                want: "/home/user/.config/faro/config.toml",
+                want: "/home/user/.config/muaddib/config.toml",
             },
         ];
         for case in cases {

@@ -1,8 +1,8 @@
-use faro::core::mode::Mode;
-use faro::engines::cli::CliEngine;
-use faro::engines::engine_by_name;
-use faro::pipeline::SearchEvent;
-use faro::pipeline::search::{SearchRequest, spawn_search};
+use muaddib::core::mode::Mode;
+use muaddib::engines::cli::CliEngine;
+use muaddib::engines::engine_by_name;
+use muaddib::pipeline::SearchEvent;
+use muaddib::pipeline::search::{SearchRequest, spawn_search};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -127,7 +127,7 @@ async fn subprocess_pipeline_ejects_sources_absent_from_findings() {
         .filter(|block| {
             matches!(
                 block,
-                faro::core::answer::Block::Paragraph { source_ids, .. } if !source_ids.is_empty()
+                muaddib::core::answer::Block::Paragraph { source_ids, .. } if !source_ids.is_empty()
             )
         })
         .count();
@@ -177,6 +177,6 @@ async fn fast_mode_strips_images_and_undeclared_sources() {
         !answer
             .blocks
             .iter()
-            .any(|block| matches!(block, faro::core::answer::Block::Image { .. }))
+            .any(|block| matches!(block, muaddib::core::answer::Block::Image { .. }))
     );
 }

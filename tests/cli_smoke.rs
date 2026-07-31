@@ -1,9 +1,9 @@
-use faro::core::answer::Answer;
+use muaddib::core::answer::Answer;
 use std::path::PathBuf;
 use std::process::Command;
 
 fn smoke_dir() -> PathBuf {
-    let dir = std::env::temp_dir().join("faro-cli-smoke");
+    let dir = std::env::temp_dir().join("muaddib-cli-smoke");
     std::fs::create_dir_all(&dir).expect("temp dir is writable");
     dir
 }
@@ -25,11 +25,11 @@ fn history_path(name: &str) -> PathBuf {
     path
 }
 
-fn faro(config: &PathBuf, history: &PathBuf) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_faro"));
+fn muaddib(config: &PathBuf, history: &PathBuf) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_muaddib"));
     command
-        .env("FARO_CONFIG", config)
-        .env("FARO_HISTORY", history);
+        .env("MUADDIB_CONFIG", config)
+        .env("MUADDIB_HISTORY", history);
     command
 }
 
@@ -37,7 +37,7 @@ fn faro(config: &PathBuf, history: &PathBuf) -> Command {
 fn print_mode_emits_a_parsable_answer_on_stdout() {
     let config = write_smoke_config("config.toml");
     let history = history_path("history-print.jsonl");
-    let output = faro(&config, &history)
+    let output = muaddib(&config, &history)
         .args(["--print", "rust async runtimes"])
         .output()
         .expect("binary runs");
@@ -58,7 +58,7 @@ fn print_mode_emits_a_parsable_answer_on_stdout() {
 fn print_mode_without_a_query_exits_with_usage_error() {
     let config = write_smoke_config("config-no-query.toml");
     let history = history_path("history-no-query.jsonl");
-    let output = faro(&config, &history)
+    let output = muaddib(&config, &history)
         .arg("--print")
         .output()
         .expect("binary runs");
@@ -70,7 +70,7 @@ fn print_mode_without_a_query_exits_with_usage_error() {
 fn unknown_mode_is_rejected_by_argument_parsing() {
     let config = write_smoke_config("config-bad-mode.toml");
     let history = history_path("history-bad-mode.jsonl");
-    let output = faro(&config, &history)
+    let output = muaddib(&config, &history)
         .args(["--print", "--mode", "casual", "query"])
         .output()
         .expect("binary runs");
@@ -82,7 +82,7 @@ fn unknown_mode_is_rejected_by_argument_parsing() {
 fn fast_mode_prints_an_answer_and_records_it_as_fast() {
     let config = write_smoke_config("config-fast.toml");
     let history = history_path("history-fast.jsonl");
-    let output = faro(&config, &history)
+    let output = muaddib(&config, &history)
         .args(["--fast", "--print", "rust async runtimes"])
         .output()
         .expect("binary runs");
@@ -107,7 +107,7 @@ fn searches_append_one_history_line_each() {
     let config = write_smoke_config("config-history.toml");
     let history = history_path("history-append.jsonl");
     for query in ["first query", "second query"] {
-        let output = faro(&config, &history)
+        let output = muaddib(&config, &history)
             .args(["--print", query])
             .output()
             .expect("binary runs");
@@ -125,7 +125,7 @@ fn clear_history_erases_the_file_and_reports_the_count() {
     let history = history_path("history-clear.jsonl");
     std::fs::write(&history, "{\"query\":\"alpha\"}\n{\"query\":\"beta\"}\n")
         .expect("history file is writable");
-    let output = faro(&config, &history)
+    let output = muaddib(&config, &history)
         .arg("--clear-history")
         .output()
         .expect("binary runs");
@@ -138,7 +138,7 @@ fn clear_history_erases_the_file_and_reports_the_count() {
 fn clear_history_is_harmless_when_nothing_was_saved() {
     let config = write_smoke_config("config-clear-empty.toml");
     let history = history_path("history-clear-empty.jsonl");
-    let output = faro(&config, &history)
+    let output = muaddib(&config, &history)
         .arg("--clear-history")
         .output()
         .expect("binary runs");

@@ -28,7 +28,7 @@ impl Default for HistoryEntry {
 pub fn history_path(home: &Path, xdg_state_home: Option<&Path>) -> PathBuf {
     xdg_state_home
         .map_or_else(|| home.join(".local").join("state"), Path::to_path_buf)
-        .join("faro")
+        .join("muaddib")
         .join("history.jsonl")
 }
 
@@ -102,13 +102,13 @@ mod tests {
                 name: "xdg state home wins",
                 home: "/home/user",
                 xdg: Some("/custom/state"),
-                want: "/custom/state/faro/history.jsonl",
+                want: "/custom/state/muaddib/history.jsonl",
             },
             Case {
                 name: "falls back to local state under home",
                 home: "/home/user",
                 xdg: None,
-                want: "/home/user/.local/state/faro/history.jsonl",
+                want: "/home/user/.local/state/muaddib/history.jsonl",
             },
         ];
         for case in cases {

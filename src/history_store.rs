@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn resolve_path() -> PathBuf {
-    resolve_path_with_fallback("FARO_HISTORY", "XDG_STATE_HOME", history_path)
+    resolve_path_with_fallback("MUADDIB_HISTORY", "XDG_STATE_HOME", history_path)
 }
 
 pub fn load_recall() -> Vec<String> {

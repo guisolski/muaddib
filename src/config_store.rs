@@ -17,7 +17,7 @@ pub(crate) fn resolve_path_with_fallback(
 }
 
 pub fn resolve_path() -> PathBuf {
-    resolve_path_with_fallback("FARO_CONFIG", "XDG_CONFIG_HOME", config_path)
+    resolve_path_with_fallback("MUADDIB_CONFIG", "XDG_CONFIG_HOME", config_path)
 }
 
 pub fn load_or_default() -> (Config, Option<String>) {

@@ -31,7 +31,7 @@ pub(crate) fn build_client() -> Option<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
         .redirect(reqwest::redirect::Policy::limited(MAX_REDIRECTS))
-        .user_agent(concat!("faro/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("muaddib/", env!("CARGO_PKG_VERSION")))
         .build()
         .ok()
 }

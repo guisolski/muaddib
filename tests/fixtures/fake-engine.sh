@@ -4,14 +4,14 @@ dir="$(cd "$(dirname "$0")" && pwd)"
 marker=""
 for arg in "$@"; do
   case "$arg" in
-    *"FARO:EXPAND"*) marker="expansion" ;;
-    *"FARO:SUBSEARCH"*) marker="subsearch" ;;
-    *"FARO:SYNTH"*) marker="synthesis" ;;
-    *"FARO:FAST"*) marker="fast" ;;
+    *"MUADDIB:EXPAND"*) marker="expansion" ;;
+    *"MUADDIB:SUBSEARCH"*) marker="subsearch" ;;
+    *"MUADDIB:SYNTH"*) marker="synthesis" ;;
+    *"MUADDIB:FAST"*) marker="fast" ;;
   esac
 done
 if [ -z "$marker" ]; then
-  echo "no faro task marker found in arguments" >&2
+  echo "no muaddib task marker found in arguments" >&2
   exit 64
 fi
 if [ "${FAKE_FAIL:-}" = "$marker" ]; then

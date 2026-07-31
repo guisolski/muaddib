@@ -1,18 +1,18 @@
 use clap::Parser;
-use faro::config_store;
-use faro::core::config::Config;
-use faro::core::mode::Mode;
-use faro::engines::cli::CliEngine;
-use faro::engines::{EngineSpec, EngineStatus, choose_engine, detect_engines};
-use faro::history_store;
-use faro::pipeline::search::{SearchRequest, spawn_search};
-use faro::pipeline::{LinkStatus, SearchEvent};
+use muaddib::config_store;
+use muaddib::core::config::Config;
+use muaddib::core::mode::Mode;
+use muaddib::engines::cli::CliEngine;
+use muaddib::engines::{EngineSpec, EngineStatus, choose_engine, detect_engines};
+use muaddib::history_store;
+use muaddib::pipeline::search::{SearchRequest, spawn_search};
+use muaddib::pipeline::{LinkStatus, SearchEvent};
 use std::process::ExitCode;
 use std::sync::Arc;
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "faro",
+    name = "muaddib",
     version,
     about = "AI-powered meta-search for your terminal"
 )]
@@ -53,16 +53,16 @@ async fn main() -> ExitCode {
     let (config, config_notice) = config_store::load_or_default();
     let config = apply_cli_overrides(config, &cli);
     if let Some(notice) = config_notice {
-        eprintln!("faro: {notice}");
+        eprintln!("muaddib: {notice}");
     }
     let statuses = detect_engines(&config);
     if cli.print {
         run_headless(&cli, &config, &statuses).await
     } else {
-        match faro::tui::run(config, statuses, cli.query.clone(), cli.mode, cli.fast).await {
+        match muaddib::tui::run(config, statuses, cli.query.clone(), cli.mode, cli.fast).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
-                eprintln!("faro: {error}");
+                eprintln!("muaddib: {error}");
                 ExitCode::FAILURE
             }
         }
@@ -73,11 +73,11 @@ fn clear_history() -> ExitCode {
     let count = history_store::load_recall().len();
     match history_store::clear() {
         Ok(()) => {
-            eprintln!("faro: search history cleared ({count} entries)");
+            eprintln!("muaddib: search history cleared ({count} entries)");
             ExitCode::SUCCESS
         }
         Err(error) => {
-            eprintln!("faro: failed to clear history: {error}");
+            eprintln!("muaddib: failed to clear history: {error}");
             ExitCode::FAILURE
         }
     }
@@ -99,7 +99,7 @@ fn apply_cli_overrides(mut config: Config, cli: &Cli) -> Config {
 
 async fn run_headless(cli: &Cli, config: &Config, statuses: &[EngineStatus]) -> ExitCode {
     let Some(query) = cli.query.clone() else {
-        eprintln!("faro: --print requires a query argument");
+        eprintln!("muaddib: --print requires a query argument");
         return ExitCode::from(2);
     };
     let Ok((status, engine_notice)) = choose_engine(statuses, &config.engine) else {
@@ -107,7 +107,7 @@ async fn run_headless(cli: &Cli, config: &Config, statuses: &[EngineStatus]) -> 
         return ExitCode::FAILURE;
     };
     if let Some(notice) = engine_notice {
-        eprintln!("faro: {notice}");
+        eprintln!("muaddib: {notice}");
     }
     let engine = CliEngine::from_status(status)
         .expect("an available engine has a resolved path")
@@ -131,12 +131,12 @@ fn headless_model(config: &Config, spec: &EngineSpec, fast: bool) -> Option<Stri
 fn record_history(query: &str, mode: Mode, fast: bool) {
     let entry = history_store::stamped_entry(query, mode, fast);
     if let Err(error) = history_store::append(&entry) {
-        eprintln!("faro: failed to save history: {error}");
+        eprintln!("muaddib: failed to save history: {error}");
     }
 }
 
 fn report_missing_engines(statuses: &[EngineStatus]) {
-    eprintln!("faro: no supported engine CLI is installed. Install one of:");
+    eprintln!("muaddib: no supported engine CLI is installed. Install one of:");
     for status in statuses {
         eprintln!("  {:<14} {}", status.spec.name, status.spec.install_hint);
     }
@@ -160,7 +160,7 @@ async fn stream_search_to_stdio(engine: Arc<CliEngine>, request: SearchRequest) 
         ExitCode::SUCCESS
     } else {
         eprintln!(
-            "faro: search failed: {}",
+            "muaddib: search failed: {}",
             failure.unwrap_or_else(|| "no answer produced".to_string())
         );
         ExitCode::FAILURE
@@ -170,18 +170,18 @@ async fn stream_search_to_stdio(engine: Arc<CliEngine>, request: SearchRequest) 
 fn report_progress(event: &SearchEvent) {
     match event {
         SearchEvent::PlanReady(plan) => {
-            eprintln!("faro: searching {} sub-queries:", plan.sub_queries.len());
+            eprintln!("muaddib: searching {} sub-queries:", plan.sub_queries.len());
             for sub in &plan.sub_queries {
                 eprintln!("  [{}] {}", sub.lang, sub.query);
             }
         }
         SearchEvent::SubQueryFinished { idx, ok } => {
             let outcome = if *ok { "done" } else { "failed" };
-            eprintln!("faro: sub-query {} {outcome}", idx + 1);
+            eprintln!("muaddib: sub-query {} {outcome}", idx + 1);
         }
-        SearchEvent::SynthesisStarted => eprintln!("faro: synthesizing answer..."),
+        SearchEvent::SynthesisStarted => eprintln!("muaddib: synthesizing answer..."),
         SearchEvent::LinkChecked { source_id, status } => {
-            eprintln!("faro: link [{source_id}] {}", link_status_label(*status));
+            eprintln!("muaddib: link [{source_id}] {}", link_status_label(*status));
         }
         SearchEvent::Completed
         | SearchEvent::SubQueryStarted { .. }
