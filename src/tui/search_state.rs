@@ -45,6 +45,7 @@ pub struct SearchState {
     pub images: HashMap<String, ImageFetch>,
     pub reveal_started: Option<u64>,
     pub pulse: Option<Pulse>,
+    pub failed_at: Option<u64>,
 }
 
 impl SearchState {
@@ -57,6 +58,7 @@ impl SearchState {
         self.images.clear();
         self.reveal_started = None;
         self.pulse = None;
+        self.failed_at = None;
         self.started_at = Some(now);
     }
 
@@ -127,6 +129,7 @@ impl SearchState {
             }
             SearchEvent::Failed(message) => {
                 self.synthesizing = false;
+                self.failed_at = Some(tick);
                 SearchOutcome::Failed(message)
             }
         }
@@ -177,6 +180,7 @@ mod tests {
                 source: 0,
                 started: 1,
             }),
+            failed_at: Some(9),
             ..SearchState::default()
         };
         state.links.insert(1, LinkStatus::Valid);
@@ -191,6 +195,7 @@ mod tests {
         assert!(state.images.is_empty());
         assert!(state.reveal_started.is_none());
         assert!(state.pulse.is_none());
+        assert!(state.failed_at.is_none());
         assert_eq!(state.started_at, Some(now));
     }
 
@@ -291,9 +296,10 @@ mod tests {
         assert!(!state.synthesizing);
         state.synthesizing = true;
         assert_eq!(
-            state.apply_event(SearchEvent::Failed("boom".to_string()), 0),
+            state.apply_event(SearchEvent::Failed("boom".to_string()), 6),
             SearchOutcome::Failed("boom".to_string())
         );
         assert!(!state.synthesizing);
+        assert_eq!(state.failed_at, Some(6));
     }
 }

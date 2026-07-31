@@ -1,6 +1,7 @@
 use crate::core::mode::MODES;
 use crate::tui::app::App;
 use crate::tui::theme;
+use crate::tui::widgets::mascot;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Margin, Rect};
 use ratatui::style::Modifier;
@@ -9,8 +10,11 @@ use ratatui::widgets::{Block, BorderType, Paragraph};
 
 const MAX_INPUT_WIDTH: u16 = 64;
 const MIN_INPUT_WIDTH: u16 = 10;
+const SCENE_ROWS: u16 = 5;
+const FULL_LAYOUT_ROWS: u16 = 14;
 
 pub fn draw(frame: &mut Frame, app: &App) {
+    let wordmark_height = wordmark_rows(frame.area().height);
     let [
         wordmark_row,
         gap,
@@ -21,7 +25,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         status_row,
         hints_row,
     ] = Layout::vertical([
-        Constraint::Length(1),
+        Constraint::Length(wordmark_height),
         Constraint::Length(1),
         Constraint::Length(3),
         Constraint::Length(1),
@@ -33,7 +37,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .flex(Flex::Center)
     .areas(frame.area());
     let _ = gap;
-    frame.render_widget(wordmark_line(), wordmark_row);
+    if wordmark_height == SCENE_ROWS {
+        frame.render_widget(scene_wordmark(app), wordmark_row);
+    } else {
+        frame.render_widget(wordmark_line(), wordmark_row);
+    }
     draw_input(frame, app, input_row);
     frame.render_widget(Paragraph::new(modes_line(app)).centered(), modes_row);
     frame.render_widget(Paragraph::new(fast_line(app)).centered(), fast_row);
@@ -45,6 +53,21 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     frame.render_widget(Paragraph::new(status_line(app)).centered(), status_row);
     frame.render_widget(Paragraph::new(hints_line()).centered(), hints_row);
+}
+
+fn wordmark_rows(height: u16) -> u16 {
+    if height >= FULL_LAYOUT_ROWS {
+        SCENE_ROWS
+    } else {
+        1
+    }
+}
+
+fn scene_wordmark(app: &App) -> Paragraph<'static> {
+    let scene = mascot::home_scene(mascot::mascot_state(app), app.tick, app.config.animations);
+    let mut lines = scene.to_vec();
+    lines.push(Line::styled("muaddib", theme::title()));
+    Paragraph::new(lines).centered()
 }
 
 fn wordmark_line() -> Paragraph<'static> {
@@ -163,6 +186,45 @@ mod tests {
             y,
             width,
             height,
+        }
+    }
+
+    #[test]
+    fn the_wordmark_grows_only_when_the_scene_fits() {
+        struct Case {
+            name: &'static str,
+            height: u16,
+            want: u16,
+        }
+        let cases = [
+            Case {
+                name: "roomy terminal",
+                height: 30,
+                want: SCENE_ROWS,
+            },
+            Case {
+                name: "exact fit",
+                height: FULL_LAYOUT_ROWS,
+                want: SCENE_ROWS,
+            },
+            Case {
+                name: "one row short",
+                height: FULL_LAYOUT_ROWS - 1,
+                want: 1,
+            },
+            Case {
+                name: "tiny",
+                height: 6,
+                want: 1,
+            },
+            Case {
+                name: "minimal",
+                height: 3,
+                want: 1,
+            },
+        ];
+        for case in cases {
+            assert_eq!(wordmark_rows(case.height), case.want, "{}", case.name);
         }
     }
 

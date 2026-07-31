@@ -14,6 +14,10 @@ pub fn heading() -> Style {
     Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
 }
 
+pub fn mascot() -> Style {
+    Style::new().fg(ACCENT)
+}
+
 pub fn dim() -> Style {
     Style::new().fg(DIM)
 }

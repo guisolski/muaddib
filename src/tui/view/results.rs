@@ -4,6 +4,7 @@ use crate::tui::images::ImageRuntime;
 use crate::tui::search_state::ImageFetch;
 use crate::tui::theme;
 use crate::tui::view::doc::{self, DocSelection, IMAGE_ROWS, ImageSlot};
+use crate::tui::widgets::mascot;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::{Line, Span};
@@ -61,12 +62,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn footer_line(app: &App) -> Line<'static> {
-    let hint = Span::styled(footer_hint(app.focus), theme::dim());
-    if app.fast {
-        Line::from(vec![Span::styled("⚡ ", theme::warn()), hint])
-    } else {
-        Line::from(hint)
+    let mut spans = Vec::new();
+    if app.config.animations
+        && let Some(started) = app.search.reveal_started
+        && let Some(celebrate) = mascot::celebrate_span(started, app.tick)
+    {
+        spans.push(celebrate);
     }
+    if app.fast {
+        spans.push(Span::styled("⚡ ", theme::warn()));
+    }
+    spans.push(Span::styled(footer_hint(app.focus), theme::dim()));
+    Line::from(spans)
 }
 
 fn draw_images(

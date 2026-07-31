@@ -52,6 +52,100 @@ mod tests {
         terminal.backend().clone()
     }
 
+    fn buffer_text(backend: &TestBackend) -> String {
+        let area = backend.buffer().area;
+        let mut out = String::new();
+        for y in area.top()..area.bottom() {
+            for x in area.left()..area.right() {
+                out.push_str(backend.buffer()[(x, y)].symbol());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn the_mascot_scene_degrades_on_short_terminals() {
+        struct Case {
+            name: &'static str,
+            height: u16,
+            want_mascot: bool,
+            want_fallback: bool,
+        }
+        let cases = [
+            Case {
+                name: "roomy home shows the mouse",
+                height: 30,
+                want_mascot: true,
+                want_fallback: false,
+            },
+            Case {
+                name: "exact fit shows the mouse",
+                height: 14,
+                want_mascot: true,
+                want_fallback: false,
+            },
+            Case {
+                name: "short home falls back to one line",
+                height: 10,
+                want_mascot: false,
+                want_fallback: true,
+            },
+            Case {
+                name: "tiny home hides the mouse",
+                height: 6,
+                want_mascot: false,
+                want_fallback: false,
+            },
+            Case {
+                name: "minimal home hides the mouse",
+                height: 3,
+                want_mascot: false,
+                want_fallback: false,
+            },
+        ];
+        for case in cases {
+            let mut app = app();
+            let backend = render(&mut app, 80, case.height);
+            let text = buffer_text(&backend);
+            assert_eq!(text.contains("(_)(_)"), case.want_mascot, "{}", case.name);
+            if case.want_fallback {
+                assert!(text.contains("▲ muaddib"), "{}", case.name);
+            }
+        }
+    }
+
+    #[test]
+    fn the_searching_panel_hops_only_when_tall_enough() {
+        struct Case {
+            name: &'static str,
+            height: u16,
+            want_mascot: bool,
+        }
+        let cases = [
+            Case {
+                name: "tall panel hops",
+                height: 30,
+                want_mascot: true,
+            },
+            Case {
+                name: "short panel drops the mouse",
+                height: 8,
+                want_mascot: false,
+            },
+        ];
+        for case in cases {
+            let mut app = app();
+            app.screen = Screen::Searching;
+            let backend = render(&mut app, 80, case.height);
+            assert_eq!(
+                buffer_text(&backend).contains("(o.o)"),
+                case.want_mascot,
+                "{}",
+                case.name
+            );
+        }
+    }
+
     #[test]
     fn overlays_never_leave_the_search_cursor_lit() {
         struct Case {

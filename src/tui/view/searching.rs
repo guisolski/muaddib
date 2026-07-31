@@ -2,7 +2,7 @@ use crate::pipeline::search::FAST_TARGET_SECS;
 use crate::tui::app::App;
 use crate::tui::search_state::SubQueryState;
 use crate::tui::theme;
-use crate::tui::widgets::spinner;
+use crate::tui::widgets::{mascot, spinner};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout};
 use ratatui::text::{Line, Span};
@@ -10,24 +10,30 @@ use ratatui::widgets::Paragraph;
 use std::time::Instant;
 
 const PANEL_WIDTH: u16 = 70;
+const MASCOT_MIN_HEIGHT: u16 = 14;
 
 pub fn draw(frame: &mut Frame, app: &App) {
-    let lines = panel_lines(app);
+    let width = PANEL_WIDTH
+        .min(frame.area().width.saturating_sub(4))
+        .max(20);
+    let include_mascot = frame.area().height >= MASCOT_MIN_HEIGHT;
+    let lines = panel_lines(app, include_mascot, usize::from(width));
     let height = lines.len() as u16;
     let [row] = Layout::vertical([Constraint::Length(height)])
         .flex(Flex::Center)
         .areas(frame.area());
-    let width = PANEL_WIDTH
-        .min(frame.area().width.saturating_sub(4))
-        .max(20);
     let [panel] = Layout::horizontal([Constraint::Length(width)])
         .flex(Flex::Center)
         .areas(row);
     frame.render_widget(Paragraph::new(lines), panel);
 }
 
-fn panel_lines(app: &App) -> Vec<Line<'static>> {
+fn panel_lines(app: &App, include_mascot: bool, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
+    if include_mascot {
+        lines.extend(mascot::hop_lines(app.tick, width, app.config.animations));
+        lines.push(Line::default());
+    }
     let mut header = vec![
         Span::styled(spinner::frame(app.tick).to_string(), theme::citation()),
         Span::styled(format!(" searching: {}", query_text(app)), theme::title()),
