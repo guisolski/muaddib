@@ -52,12 +52,33 @@ pub enum ConfigField {
     MaxParallel,
 }
 
-pub const CONFIG_FIELDS: &[ConfigField] = &[
-    ConfigField::Language,
-    ConfigField::Engine,
-    ConfigField::Model,
-    ConfigField::ValidateLinks,
-    ConfigField::MaxParallel,
+#[derive(Debug, Clone, Copy)]
+pub struct ConfigFieldSpec {
+    pub field: ConfigField,
+    pub label: &'static str,
+}
+
+pub const CONFIG_FIELDS: &[ConfigFieldSpec] = &[
+    ConfigFieldSpec {
+        field: ConfigField::Language,
+        label: "language",
+    },
+    ConfigFieldSpec {
+        field: ConfigField::Engine,
+        label: "engine",
+    },
+    ConfigFieldSpec {
+        field: ConfigField::Model,
+        label: "model",
+    },
+    ConfigFieldSpec {
+        field: ConfigField::ValidateLinks,
+        label: "validate links",
+    },
+    ConfigFieldSpec {
+        field: ConfigField::MaxParallel,
+        label: "max parallel",
+    },
 ];
 
 pub const ENGINE_DEFAULT_MODEL: &str = "default";
@@ -114,7 +135,7 @@ impl ConfigForm {
     }
 
     pub fn field(&self) -> ConfigField {
-        CONFIG_FIELDS[self.field_idx % CONFIG_FIELDS.len()]
+        CONFIG_FIELDS[self.field_idx % CONFIG_FIELDS.len()].field
     }
 
     pub fn apply_to(&self, config: &mut Config, statuses: &[EngineStatus]) {

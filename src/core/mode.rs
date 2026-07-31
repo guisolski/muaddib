@@ -18,6 +18,7 @@ pub struct ModeSpec {
     pub breadth: u8,
     pub cross_language: bool,
     pub instructions: &'static str,
+    pub facets: &'static [&'static str],
 }
 
 pub const MODES: &[ModeSpec] = &[
@@ -27,6 +28,15 @@ pub const MODES: &[ModeSpec] = &[
         breadth: 3,
         cross_language: true,
         instructions: "Provide a balanced overview of the topic backed by reputable sources.",
+        facets: &[
+            "overview",
+            "advantages and disadvantages",
+            "recent developments",
+            "common criticisms",
+            "practical examples",
+            "comparison with alternatives",
+            "frequently asked questions",
+        ],
     },
     ModeSpec {
         mode: Mode::Scientific,
@@ -34,6 +44,15 @@ pub const MODES: &[ModeSpec] = &[
         breadth: 4,
         cross_language: true,
         instructions: "Prioritize peer-reviewed papers and preprints. Prefer arXiv, DOI, and PubMed links. Cite venue and year for every claim.",
+        facets: &[
+            "peer-reviewed research",
+            "survey papers",
+            "methodology",
+            "open problems",
+            "recent findings",
+            "datasets and benchmarks",
+            "replication studies",
+        ],
     },
     ModeSpec {
         mode: Mode::News,
@@ -41,6 +60,15 @@ pub const MODES: &[ModeSpec] = &[
         breadth: 3,
         cross_language: true,
         instructions: "Focus on coverage from the last 30 days. Prioritize recency, consult multiple outlets, and attach dates to claims.",
+        facets: &[
+            "latest news",
+            "timeline of events",
+            "official statements",
+            "analysis and commentary",
+            "regional coverage",
+            "fact check",
+            "economic impact",
+        ],
     },
     ModeSpec {
         mode: Mode::Deep,
@@ -48,6 +76,15 @@ pub const MODES: &[ModeSpec] = &[
         breadth: 6,
         cross_language: true,
         instructions: "Cover the topic exhaustively across distinct facets. Include contrarian views and primary sources.",
+        facets: &[
+            "history and origins",
+            "state of the art",
+            "criticism and controversies",
+            "alternatives and competitors",
+            "future outlook",
+            "case studies",
+            "expert opinions",
+        ],
     },
 ];
 
@@ -93,6 +130,7 @@ impl FromStr for Mode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::MAX_BREADTH;
     use std::collections::BTreeSet;
 
     #[test]
@@ -112,6 +150,17 @@ mod tests {
     fn modes_table_instructions_are_not_empty() {
         for spec in MODES {
             assert!(!spec.instructions.is_empty(), "{}", spec.label);
+        }
+    }
+
+    #[test]
+    fn modes_table_facets_support_max_breadth() {
+        for spec in MODES {
+            assert!(
+                spec.facets.len() >= usize::from(MAX_BREADTH) - 1,
+                "{}",
+                spec.label
+            );
         }
     }
 

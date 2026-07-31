@@ -95,11 +95,7 @@ pub enum DiagramType {
 
 impl From<String> for DiagramType {
     fn from(raw: String) -> Self {
-        if raw.eq_ignore_ascii_case("timeline") {
-            Self::Timeline
-        } else {
-            Self::Flow
-        }
+        from_matching_str(&raw, "timeline", Self::Timeline, Self::Flow)
     }
 }
 
@@ -120,11 +116,7 @@ pub enum Emphasis {
 
 impl From<String> for Emphasis {
     fn from(raw: String) -> Self {
-        if raw.eq_ignore_ascii_case("highlight") {
-            Self::Highlight
-        } else {
-            Self::None
-        }
+        from_matching_str(&raw, "highlight", Self::Highlight, Self::None)
     }
 }
 
@@ -142,11 +134,15 @@ pub enum ChartType {
 
 impl From<String> for ChartType {
     fn from(raw: String) -> Self {
-        if raw.eq_ignore_ascii_case("bar") {
-            Self::Bar
-        } else {
-            Self::Other
-        }
+        from_matching_str(&raw, "bar", Self::Bar, Self::Other)
+    }
+}
+
+fn from_matching_str<T>(raw: &str, needle: &str, matched: T, default: T) -> T {
+    if raw.eq_ignore_ascii_case(needle) {
+        matched
+    } else {
+        default
     }
 }
 

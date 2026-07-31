@@ -35,13 +35,7 @@ pub fn fast_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, inline_schem
 }
 
 fn fast_output_contract(inline_schema: bool) -> String {
-    if inline_schema {
-        format!(
-            "Reply with ONLY a JSON object matching this JSON Schema, no prose:\n{FAST_ANSWER_SCHEMA}"
-        )
-    } else {
-        structured_output_contract()
-    }
+    json_schema_or_tool_contract(inline_schema, FAST_ANSWER_SCHEMA)
 }
 
 fn structured_output_contract() -> String {
@@ -139,10 +133,12 @@ fn findings_json(merged: &MergedFindings) -> String {
 }
 
 fn output_contract(inline_schema: bool) -> String {
+    json_schema_or_tool_contract(inline_schema, ANSWER_SCHEMA)
+}
+
+fn json_schema_or_tool_contract(inline_schema: bool, schema: &str) -> String {
     if inline_schema {
-        format!(
-            "Reply with ONLY a JSON object matching this JSON Schema, no prose:\n{ANSWER_SCHEMA}"
-        )
+        format!("Reply with ONLY a JSON object matching this JSON Schema, no prose:\n{schema}")
     } else {
         structured_output_contract()
     }

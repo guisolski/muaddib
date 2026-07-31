@@ -11,8 +11,8 @@ and [`docs/architecture.md`](docs/architecture.md) for the full design.
 ```
 src/
 ├── core/       pure — zero I/O, no tokio, no ratatui (mode, plan, prompts,
-│               extract, answer, citations, config, history)
-├── engines/    AI CLI subprocess adapters (ENGINES table, argv, parsing)
+│               extract, answer, citations, config, history, engine)
+├── engines/    AI CLI subprocess adapters (spawn, bin resolution)
 ├── pipeline/   async orchestration: fan-out, merge, link validation
 ├── tui/        ratatui event loop, reducer, views, widgets
 ├── config_store.rs / history_store.rs   filesystem adapters
@@ -58,7 +58,7 @@ pub fn extract_json(raw: &str) -> Option<Value> {
 }
 ```
 
-Other tables to know: `MODES` (`core/mode.rs`), `ENGINES` (`engines/mod.rs`),
+Other tables to know: `MODES` (`core/mode.rs`), `ENGINES` (`core/engine.rs`),
 `KEYMAP` (`tui/keymap.rs`), `CONFIG_FIELDS` (`tui/app.rs`).
 
 **Functional Rust.** `src/core/` must stay pure — deterministic, no I/O, no

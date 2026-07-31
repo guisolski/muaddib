@@ -1,21 +1,16 @@
+use crate::config_store::resolve_path_with_fallback;
 use crate::core::history::{
     HistoryEntry, MAX_HISTORY, cap_entries, entry_line, history_path, parse_history, recall_list,
     to_jsonl,
 };
 use crate::core::mode::Mode;
-use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn resolve_path() -> PathBuf {
-    if let Some(explicit) = env::var_os("FARO_HISTORY") {
-        return PathBuf::from(explicit);
-    }
-    let home = env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    let xdg = env::var_os("XDG_STATE_HOME").map(PathBuf::from);
-    history_path(&home, xdg.as_deref())
+    resolve_path_with_fallback("FARO_HISTORY", "XDG_STATE_HOME", history_path)
 }
 
 pub fn load_recall() -> Vec<String> {

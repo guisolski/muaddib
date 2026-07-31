@@ -5,14 +5,8 @@ pub mod search;
 pub mod validate;
 
 use crate::core::answer::Answer;
+pub use crate::core::citations::LinkStatus;
 use crate::core::plan::SearchPlan;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LinkStatus {
-    Valid,
-    Invalid(u16),
-    Unreachable,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchEvent {

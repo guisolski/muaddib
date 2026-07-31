@@ -139,6 +139,40 @@ pub fn eject_unknown_images(mut answer: Answer, allowed: &BTreeSet<String>) -> A
     answer
 }
 
+pub fn image_urls(answer: &Answer) -> Vec<String> {
+    answer
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            Block::Image { url, .. } => Some(url.clone()),
+            _ => None,
+        })
+        .fold(Vec::new(), |mut urls, url| {
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
+            urls
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkStatus {
+    Valid,
+    Invalid(u16),
+    Unreachable,
+}
+
+pub fn classify_status(code: u16) -> LinkStatus {
+    match code {
+        200..=399 => LinkStatus::Valid,
+        _ => LinkStatus::Invalid(code),
+    }
+}
+
+pub fn should_retry_with_get(code: u16) -> bool {
+    matches!(code, 403 | 405 | 501)
+}
+
 pub fn renumber_sources(mut answer: Answer, allowed: &BTreeSet<String>) -> Answer {
     let valid_by_old_id = index_allowed_sources(&answer.sources, allowed);
     let first_use_order = referenced_ids_in_first_use_order(&answer.blocks, &valid_by_old_id);
@@ -703,6 +737,126 @@ mod tests {
                 "{}",
                 case.name
             );
+        }
+    }
+
+    #[test]
+    fn classify_status_maps_http_codes_to_link_health() {
+        struct Case {
+            name: &'static str,
+            code: u16,
+            want: LinkStatus,
+        }
+        let cases = [
+            Case {
+                name: "ok",
+                code: 200,
+                want: LinkStatus::Valid,
+            },
+            Case {
+                name: "redirect already followed",
+                code: 301,
+                want: LinkStatus::Valid,
+            },
+            Case {
+                name: "not found",
+                code: 404,
+                want: LinkStatus::Invalid(404),
+            },
+            Case {
+                name: "gone",
+                code: 410,
+                want: LinkStatus::Invalid(410),
+            },
+            Case {
+                name: "server error",
+                code: 500,
+                want: LinkStatus::Invalid(500),
+            },
+        ];
+        for case in cases {
+            assert_eq!(classify_status(case.code), case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn head_unfriendly_codes_trigger_a_ranged_get_retry() {
+        struct Case {
+            name: &'static str,
+            code: u16,
+            want: bool,
+        }
+        let cases = [
+            Case {
+                name: "forbidden often blocks head only",
+                code: 403,
+                want: true,
+            },
+            Case {
+                name: "method not allowed",
+                code: 405,
+                want: true,
+            },
+            Case {
+                name: "not implemented",
+                code: 501,
+                want: true,
+            },
+            Case {
+                name: "ok needs no retry",
+                code: 200,
+                want: false,
+            },
+            Case {
+                name: "not found needs no retry",
+                code: 404,
+                want: false,
+            },
+        ];
+        for case in cases {
+            assert_eq!(should_retry_with_get(case.code), case.want, "{}", case.name);
+        }
+    }
+
+    fn image_block(url: &str) -> Block {
+        Block::Image {
+            url: url.to_string(),
+            caption: String::new(),
+            source_ids: vec![],
+            emphasis: Emphasis::None,
+        }
+    }
+
+    #[test]
+    fn image_urls_are_unique_and_in_document_order() {
+        struct Case {
+            name: &'static str,
+            blocks: Vec<Block>,
+            want: Vec<&'static str>,
+        }
+        let cases = [
+            Case {
+                name: "no image blocks yield nothing",
+                blocks: vec![Block::Unknown],
+                want: vec![],
+            },
+            Case {
+                name: "duplicates collapse keeping first position",
+                blocks: vec![
+                    image_block("https://img.example/a.png"),
+                    Block::Unknown,
+                    image_block("https://img.example/b.png"),
+                    image_block("https://img.example/a.png"),
+                ],
+                want: vec!["https://img.example/a.png", "https://img.example/b.png"],
+            },
+        ];
+        for case in cases {
+            let answer = Answer {
+                blocks: case.blocks,
+                ..Answer::default()
+            };
+            assert_eq!(image_urls(&answer), case.want, "{}", case.name);
         }
     }
 }

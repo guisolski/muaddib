@@ -1,4 +1,6 @@
-use crate::tui::app::{App, CONFIG_FIELDS, ConfigField, ConfigForm, LANGUAGES, model_choices};
+use crate::tui::app::{
+    App, CONFIG_FIELDS, ConfigField, ConfigFieldSpec, ConfigForm, LANGUAGES, model_choices,
+};
 use crate::tui::theme;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -18,8 +20,8 @@ pub fn draw(frame: &mut Frame, app: &App, form: &ConfigForm) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
     let mut lines = vec![Line::default()];
-    for (index, field) in CONFIG_FIELDS.iter().enumerate() {
-        lines.push(field_line(app, form, *field, index == form.field_idx));
+    for (index, spec) in CONFIG_FIELDS.iter().enumerate() {
+        lines.push(field_line(app, form, *spec, index == form.field_idx));
     }
     lines.push(Line::default());
     lines.push(Line::styled(
@@ -39,7 +41,12 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     rect
 }
 
-fn field_line(app: &App, form: &ConfigForm, field: ConfigField, selected: bool) -> Line<'static> {
+fn field_line(
+    app: &App,
+    form: &ConfigForm,
+    spec: ConfigFieldSpec,
+    selected: bool,
+) -> Line<'static> {
     let marker = if selected { "▸ " } else { "  " };
     let label_style = if selected {
         theme::title()
@@ -48,19 +55,9 @@ fn field_line(app: &App, form: &ConfigForm, field: ConfigField, selected: bool) 
     };
     Line::from(vec![
         Span::styled(marker.to_string(), theme::citation()),
-        Span::styled(format!("{:<16}", field_label(field)), label_style),
-        Span::raw(field_value(app, form, field)),
+        Span::styled(format!("{:<16}", spec.label), label_style),
+        Span::raw(field_value(app, form, spec.field)),
     ])
-}
-
-fn field_label(field: ConfigField) -> &'static str {
-    match field {
-        ConfigField::Language => "language",
-        ConfigField::Engine => "engine",
-        ConfigField::Model => "model",
-        ConfigField::ValidateLinks => "validate links",
-        ConfigField::MaxParallel => "max parallel",
-    }
 }
 
 fn field_value(app: &App, form: &ConfigForm, field: ConfigField) -> String {

@@ -1,7 +1,6 @@
-use crate::engines::parse::envelope_text;
+use crate::core::engine::{build_args, envelope_text};
 use crate::engines::{
     BoxedEngineFuture, Engine, EngineError, EngineJob, EngineOutput, EngineSpec, EngineStatus,
-    build_args,
 };
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -90,8 +89,8 @@ fn tail(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::engine::ParseStrategy;
     use crate::engines::EngineId;
-    use crate::engines::parse::ParseStrategy;
     use std::time::Duration;
 
     const ECHO_SPEC: EngineSpec = EngineSpec {

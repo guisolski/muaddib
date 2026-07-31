@@ -256,18 +256,38 @@ fn submit_query(app: &mut App) -> Option<Command> {
 }
 
 fn move_down(app: &mut App) {
+    move_focus(app, true);
+}
+
+fn move_up(app: &mut App) {
+    move_focus(app, false);
+}
+
+fn move_focus(app: &mut App, forward: bool) {
     match app.focus {
-        Focus::Body => app.scroll = app.scroll.saturating_add(1).min(max_scroll(app)),
+        Focus::Body => {
+            app.scroll = if forward {
+                app.scroll.saturating_add(1).min(max_scroll(app))
+            } else {
+                app.scroll.saturating_sub(1)
+            };
+        }
         Focus::Sources(index) => {
-            let last = app.source_count().saturating_sub(1);
-            app.focus = Focus::Sources((index + 1).min(last));
+            app.focus = Focus::Sources(step_index(index, forward, app.source_count()));
             ensure_selection_visible(app);
         }
         Focus::Followups(index) => {
-            let last = app.followup_count().saturating_sub(1);
-            app.focus = Focus::Followups((index + 1).min(last));
+            app.focus = Focus::Followups(step_index(index, forward, app.followup_count()));
             ensure_selection_visible(app);
         }
+    }
+}
+
+fn step_index(index: usize, forward: bool, count: usize) -> usize {
+    if forward {
+        (index + 1).min(count.saturating_sub(1))
+    } else {
+        index.saturating_sub(1)
     }
 }
 
@@ -370,20 +390,6 @@ fn max_scroll(app: &App) -> u16 {
 
 fn clamp_scroll(app: &mut App) {
     app.scroll = app.scroll.min(max_scroll(app));
-}
-
-fn move_up(app: &mut App) {
-    match app.focus {
-        Focus::Body => app.scroll = app.scroll.saturating_sub(1),
-        Focus::Sources(index) => {
-            app.focus = Focus::Sources(index.saturating_sub(1));
-            ensure_selection_visible(app);
-        }
-        Focus::Followups(index) => {
-            app.focus = Focus::Followups(index.saturating_sub(1));
-            ensure_selection_visible(app);
-        }
-    }
 }
 
 struct FormContext {

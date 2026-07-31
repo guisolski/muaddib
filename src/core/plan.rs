@@ -137,57 +137,20 @@ pub fn fallback_expansion(
 ) -> Vec<SubQuery> {
     let cross_language = mode.spec().cross_language;
     let facet_lang = if cross_language { "en" } else { answer_lang };
-    let mut sub_queries = vec![literal_subquery(original, answer_lang)];
     let facet_count = usize::from(breadth.max(1)) - 1;
-    for facet in fallback_facets(mode).iter().take(facet_count) {
-        sub_queries.push(SubQuery {
+    let facets = mode
+        .spec()
+        .facets
+        .iter()
+        .take(facet_count)
+        .map(|facet| SubQuery {
             query: format!("{} {facet}", original.trim()),
             lang: facet_lang.to_string(),
             rationale: format!("facet: {facet}"),
         });
-    }
-    sub_queries
-}
-
-fn fallback_facets(mode: Mode) -> &'static [&'static str] {
-    match mode {
-        Mode::General => &[
-            "overview",
-            "advantages and disadvantages",
-            "recent developments",
-            "common criticisms",
-            "practical examples",
-            "comparison with alternatives",
-            "frequently asked questions",
-        ],
-        Mode::Scientific => &[
-            "peer-reviewed research",
-            "survey papers",
-            "methodology",
-            "open problems",
-            "recent findings",
-            "datasets and benchmarks",
-            "replication studies",
-        ],
-        Mode::News => &[
-            "latest news",
-            "timeline of events",
-            "official statements",
-            "analysis and commentary",
-            "regional coverage",
-            "fact check",
-            "economic impact",
-        ],
-        Mode::Deep => &[
-            "history and origins",
-            "state of the art",
-            "criticism and controversies",
-            "alternatives and competitors",
-            "future outlook",
-            "case studies",
-            "expert opinions",
-        ],
-    }
+    std::iter::once(literal_subquery(original, answer_lang))
+        .chain(facets)
+        .collect()
 }
 
 #[cfg(test)]
@@ -257,16 +220,6 @@ mod tests {
         assert_eq!(subs[1].lang, "en");
         assert_eq!(subs[2].lang, "en");
         assert!(subs[1].query.starts_with("energia solar "));
-    }
-
-    #[test]
-    fn fallback_facet_tables_support_max_breadth() {
-        for mode in Mode::all() {
-            assert!(
-                fallback_facets(mode).len() >= usize::from(MAX_BREADTH) - 1,
-                "{mode}"
-            );
-        }
     }
 
     #[test]
