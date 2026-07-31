@@ -1,6 +1,6 @@
 # Engines
 
-faro does not talk to model APIs. It drives locally installed AI CLIs as
+muaddib does not talk to model APIs. It drives locally installed AI CLIs as
 subprocesses, reusing their authentication and their built-in web access.
 
 ## The engine table
@@ -56,7 +56,7 @@ At startup `detect_engines` walks the table and checks each binary on `PATH`
 (honoring per-engine `bin` overrides from the config). Unavailable engines show
 as "(not installed)" in the config modal and cannot be selected. If the
 configured engine is missing, `choose_engine` falls back to the first available
-one and surfaces a notice. If none are installed, faro prints each engine's
+one and surfaces a notice. If none are installed, muaddib prints each engine's
 install hint.
 
 ## Execution
@@ -80,5 +80,5 @@ install hint.
 
 `[engines.<name>] bin = "/path"` in the config doubles as the test seam: the
 integration tests point `claude` at `tests/fixtures/fake-engine.sh`, which
-routes on the prompt's task markers (`FARO:EXPAND` / `FARO:SUBSEARCH` /
-`FARO:SYNTH`) and answers with canned fixtures. CI never invokes a real AI CLI.
+routes on the prompt's task markers (`MUADDIB:EXPAND` / `MUADDIB:SUBSEARCH` /
+`MUADDIB:SYNTH`) and answers with canned fixtures. CI never invokes a real AI CLI.

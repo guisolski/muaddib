@@ -1,19 +1,43 @@
-# ▲ faro
+# ▲ muaddib
 
-> Sniff out answers. Every claim, sourced.
+> The one who points the way. Every claim, sourced.
 
-[![CI](https://github.com/guisolski/faro/actions/workflows/ci.yml/badge.svg)](https://github.com/guisolski/faro/actions/workflows/ci.yml)
+[![CI](https://github.com/guisolski/muaddib/actions/workflows/ci.yml/badge.svg)](https://github.com/guisolski/muaddib/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.93%2B-orange.svg)](Cargo.toml)
 
-**faro** (Portuguese: *"ter faro"* — an instinct for finding things) is an AI-powered
-meta-search engine that lives in your terminal. Type a question, and faro expands it
-into multiple sub-queries — across facets *and* languages — runs them in parallel
-through the AI CLI you already have installed, and compiles one synthesized answer
-where **every claim carries a verified source link**.
+```
+       \ /
+      (o.o)~-,
+      (_)(_)
+    ﹏﹏﹏▲﹏﹏﹏
+```
+
+**muaddib** is an AI-powered meta-search engine that lives in your terminal.
+Type a question, and muaddib expands it into multiple sub-queries — across
+facets *and* languages — runs them in parallel through the AI CLI you already
+have installed, and compiles one synthesized answer where **every claim carries
+a verified source link**.
+
+## Why "muaddib"?
+
+In *Dune*, the muad'dib is the desert kangaroo mouse — the Fremen admire it
+because it survives the deep desert and creates its own water, and the
+constellation named after it is called **"the one who points the way"**. That
+is the whole job of a search engine. The little mouse is the TUI's mascot: it
+sleeps on the dunes while you type, hops across them while your search fans
+out, and celebrates when the answer lands. Sit idle long enough and Shai-Hulud
+passes through.
+
+The project was previously named **faro** (Portuguese for a scent-tracking
+instinct) — the mouse kept the nose.
 
 ```
-                                ▲ faro
+                                  \ /
+                                 (o.o)~-,
+                                 (_)(_)
+                                ﹏﹏﹏▲﹏﹏﹏
+                                  muaddib
 
                 ╭──────────────────────────────────────╮
                 │ why is the sky blue?                 │
@@ -25,7 +49,7 @@ where **every claim carries a verified source link**.
     Enter search · ↑ history · Tab mode · Ctrl+O config · Ctrl+G help
 ```
 
-## Why faro?
+## Why use it?
 
 - **It searches beyond your words.** Your query is expanded into distinct facets and
   translated variants (the topic's origin language, English, …), so the answer draws
@@ -33,7 +57,7 @@ where **every claim carries a verified source link**.
 - **Every claim is cited.** The answer is a structured document where each paragraph,
   list item, table, and chart references numbered sources. URLs that don't come from
   the actual searches are ejected, and every link is health-checked (HTTP HEAD) live.
-- **No API keys.** faro drives the AI CLIs you already use — `claude`, `cursor-agent`,
+- **No API keys.** muaddib drives the AI CLIs you already use — `claude`, `cursor-agent`,
   `codex`, `opencode` — as subprocesses, reusing their auth and their built-in web
   search.
 - **Fast and light.** A single small Rust binary. Sub-searches fan out concurrently
@@ -75,28 +99,28 @@ where **every claim carries a verified source link**.
 | Codex CLI | `codex` | model-dependent | prompt-enforced | `npm install -g @openai/codex` |
 | opencode | `opencode` | model-dependent | prompt-enforced | `npm install -g opencode-ai` |
 
-Engines that are not installed appear greyed out in the config modal; faro falls back
+Engines that are not installed appear greyed out in the config modal; muaddib falls back
 to the first available engine automatically.
 
 ## Install
 
 ```sh
-git clone https://github.com/guisolski/faro
-cd faro
+git clone https://github.com/guisolski/muaddib
+cd muaddib
 make install        # cargo install --path .
 ```
 
 ## Usage
 
 ```sh
-faro                          # open the TUI
-faro "quantum computing"      # open the TUI and search immediately
-faro --mode scientific "CRISPR delivery methods"
-faro --lang en --engine claude "energia solar no brasil"
-faro --model haiku "capital of australia"   # pass a model to the engine CLI
-faro --fast "capital of peru"               # one engine call instead of three
-faro --print "rust 1.93 release highlights" > answer.json   # headless JSON
-faro --clear-history                        # erase the saved search history
+muaddib                          # open the TUI
+muaddib "quantum computing"      # open the TUI and search immediately
+muaddib --mode scientific "CRISPR delivery methods"
+muaddib --lang en --engine claude "energia solar no brasil"
+muaddib --model haiku "capital of australia"   # pass a model to the engine CLI
+muaddib --fast "capital of peru"               # one engine call instead of three
+muaddib --print "rust 1.93 release highlights" > answer.json   # headless JSON
+muaddib --clear-history                        # erase the saved search history
 ```
 
 ### Keybindings
@@ -168,7 +192,7 @@ Read more in [`docs/`](docs/): [architecture](docs/architecture.md) ·
 
 ## Configuration
 
-`~/.config/faro/config.toml` (or `$XDG_CONFIG_HOME/faro/config.toml`, or `$FARO_CONFIG`):
+`~/.config/muaddib/config.toml` (or `$XDG_CONFIG_HOME/muaddib/config.toml`, or `$MUADDIB_CONFIG`):
 
 ```toml
 language = "pt-BR"          # answer language (BCP-47)
@@ -188,9 +212,16 @@ fast_model = "haiku"        # model used in fast mode
 ```
 
 Search history lives separately, under the XDG *state* dir:
-`~/.local/state/faro/history.jsonl` (or `$XDG_STATE_HOME/faro/history.jsonl`, or
-`$FARO_HISTORY`). It is JSON Lines — one appended object per search, capped at 500
+`~/.local/state/muaddib/history.jsonl` (or `$XDG_STATE_HOME/muaddib/history.jsonl`, or
+`$MUADDIB_HISTORY`). It is JSON Lines — one appended object per search, capped at 500
 entries, with unparsable lines skipped rather than fatal.
+
+Upgrading from the old **faro** name? Your config and history don't move themselves:
+
+```sh
+mv ~/.config/faro ~/.config/muaddib
+mv ~/.local/state/faro ~/.local/state/muaddib
+```
 
 ## Development
 

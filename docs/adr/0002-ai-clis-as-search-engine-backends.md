@@ -5,7 +5,7 @@
 
 ## Context
 
-faro needs web search plus analysis and synthesis. The obvious implementations
+muaddib needs web search plus analysis and synthesis. The obvious implementations
 are: call model HTTP APIs directly, scrape search engines, or drive the AI CLIs
 users already have (`claude`, `cursor-agent`, `codex`, `opencode`).
 
@@ -19,10 +19,10 @@ degrades gracefully.
 
 ## Consequences
 
-- **Zero API-key management.** faro reuses the user's existing CLI auth and
+- **Zero API-key management.** muaddib reuses the user's existing CLI auth and
   billing; nothing is stored or proxied.
 - **Web search for free.** Claude Code's WebSearch/WebFetch tools give real
-  browsing without faro implementing a crawler.
+  browsing without muaddib implementing a crawler.
 - **Adding an engine is one table row** plus, at most, an envelope fixture and
   a parse test.
 - Cost: CLI output is only semi-structured; robustness comes from two tolerant

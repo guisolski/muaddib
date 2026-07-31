@@ -1,6 +1,6 @@
 # AGENTS.md
 
-faro is an AI-powered meta-search engine for the terminal: a single Rust
+muaddib is an AI-powered meta-search engine for the terminal: a single Rust
 binary that expands a query into sub-queries, fans them out through an
 already-installed AI CLI, merges and cites the findings, and renders the
 answer in a ratatui TUI. See [`README.md`](README.md) for the product view

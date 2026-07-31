@@ -1,6 +1,6 @@
 # Architecture
 
-faro is a single binary crate with a `lib.rs`, structured hexagonally: a pure
+muaddib is a single binary crate with a `lib.rs`, structured hexagonally: a pure
 functional core surrounded by thin adapters for subprocesses, HTTP, and the
 terminal.
 
@@ -60,6 +60,7 @@ logic needs to be touched:
 | `KEYMAP` | `tui/keymap.rs` | keybindings, and the Ctrl+G help screen |
 | `CONFIG_FIELDS` | `tui/app.rs` | config modal fields |
 | `FRAMES` | `tui/widgets/spinner.rs` | spinner animation |
+| `SLEEPING` / `WORM` | `tui/widgets/mascot.rs` | mascot frames: sleeping breath, hop, Shai-Hulud pass |
 | `GENERIC_TEXT_KEYS` | `engines/parse.rs` | envelope key probing |
 | fallback facet tables | `core/plan.rs` | offline query expansion |
 
@@ -103,8 +104,8 @@ CLI processes.
 src/
 ├── main.rs           clap CLI, headless --print mode, TUI launch
 ├── lib.rs            public modules (integration tests build against this)
-├── config_store.rs   config file resolution and persistence (FARO_CONFIG, XDG)
-├── history_store.rs  search history file: append, load, clear (FARO_HISTORY, XDG state)
+├── config_store.rs   config file resolution and persistence (MUADDIB_CONFIG, XDG)
+├── history_store.rs  search history file: append, load, clear (MUADDIB_HISTORY, XDG state)
 ├── core/             pure: mode, plan, prompts, extract, answer, citations, config, history
 ├── engines/          EngineSpec table, Engine trait, CliEngine, output parsing
 ├── pipeline/         SearchEvent protocol, stage orchestration, link validation

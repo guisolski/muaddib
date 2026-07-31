@@ -2,27 +2,27 @@
 
 ## File locations
 
-faro keeps two files apart: hand-edited settings under the XDG *config* dir, and
+muaddib keeps two files apart: hand-edited settings under the XDG *config* dir, and
 machine-appended search history under the XDG *state* dir.
 
 ### Config
 
 Resolution order (first hit wins):
 
-1. `$FARO_CONFIG` — explicit path (also the test seam)
-2. `$XDG_CONFIG_HOME/faro/config.toml`
-3. `~/.config/faro/config.toml`
+1. `$MUADDIB_CONFIG` — explicit path (also the test seam)
+2. `$XDG_CONFIG_HOME/muaddib/config.toml`
+3. `~/.config/muaddib/config.toml`
 
 A missing file means defaults; a malformed file means defaults plus a visible
-notice (faro never refuses to start over config).
+notice (muaddib never refuses to start over config).
 
 ### Search history
 
 Resolution order (first hit wins):
 
-1. `$FARO_HISTORY` — explicit path (also the test seam)
-2. `$XDG_STATE_HOME/faro/history.jsonl`
-3. `~/.local/state/faro/history.jsonl`
+1. `$MUADDIB_HISTORY` — explicit path (also the test seam)
+2. `$XDG_STATE_HOME/muaddib/history.jsonl`
+3. `~/.local/state/muaddib/history.jsonl`
 
 `$XDG_STATE_HOME` is where the base-directory spec puts "actions history", which
 is exactly what this is — not user-editable configuration.
@@ -109,7 +109,7 @@ Measured against `claude` + `haiku`, wall clock, warm CLI:
 | `rust async runtime tradeoffs` (3 sub-searches) | ~166s | ~31s |
 
 **Five seconds is a target, not a contract, and in practice it is not reached.**
-The floor is not faro — it is the engine CLI's agent loop: process start, a large
+The floor is not muaddib — it is the engine CLI's agent loop: process start, a large
 agent system prompt, a thinking block, the web search round-trip, and a second
 thinking block before the structured answer. That is roughly 15–30s for `haiku`,
 whatever the prompt asks for.
@@ -123,7 +123,7 @@ trips it.
 
 | Key | Effect |
 |---|---|
-| `$FARO_HISTORY` | overrides the history file path entirely |
+| `$MUADDIB_HISTORY` | overrides the history file path entirely |
 | `--clear-history` | erases the file, reports the count, exits |
 
 In the TUI, `Up`/`Down` walk the history from the search bar and `Ctrl+L` clears

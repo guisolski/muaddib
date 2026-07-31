@@ -3,7 +3,7 @@
 ## Setup
 
 ```sh
-git clone https://github.com/guisolski/faro && cd faro
+git clone https://github.com/guisolski/muaddib && cd muaddib
 make hooks     # install pre-commit + commit-msg + pre-push hooks
 make test
 ```
@@ -51,8 +51,8 @@ make test
 ## The fake engine harness
 
 Tests never call a real AI CLI. `tests/fixtures/fake-engine.sh` inspects its
-arguments for the task markers that the prompt builders embed (`FARO:EXPAND`,
-`FARO:SUBSEARCH`, `FARO:SYNTH`) and answers with the matching JSON fixture.
+arguments for the task markers that the prompt builders embed (`MUADDIB:EXPAND`,
+`MUADDIB:SUBSEARCH`, `MUADDIB:SYNTH`) and answers with the matching JSON fixture.
 `fake-engine-fail-expand.sh` forces the expansion-failure path. The in-process
 `FakeEngine` (in `pipeline/search.rs` tests) covers the same protocol without
 subprocess overhead.

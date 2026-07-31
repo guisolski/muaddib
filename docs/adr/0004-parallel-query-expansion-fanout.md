@@ -5,7 +5,7 @@
 
 ## Context
 
-faro's differentiator is that it does not search only the literal query text: it
+muaddib's differentiator is that it does not search only the literal query text: it
 expands into related facets and other languages. Engine calls take tens of
 seconds each; running expanded sub-queries sequentially would make the product
 unusably slow, and depending on a model call for expansion would add a hard

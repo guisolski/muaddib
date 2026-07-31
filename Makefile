@@ -3,7 +3,7 @@
 .PHONY: help all build release run test check fmt fmt-check lint clean install doc hooks precommit ci
 
 help: ## Show this help (default target)
-	@awk 'BEGIN {FS = ":.*## "; printf "\nfaro — make targets\n\n"} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2} END {print ""}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*## "; printf "\nmuaddib — make targets\n\n"} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2} END {print ""}' $(MAKEFILE_LIST)
 
 all: build ## Alias for build
 
@@ -34,7 +34,7 @@ lint: ## Run clippy on every target, warnings are errors
 clean: ## Remove build artifacts
 	cargo clean
 
-install: ## Install the faro binary with cargo
+install: ## Install the muaddib binary with cargo
 	cargo install --path .
 
 doc: ## Build and open the API docs

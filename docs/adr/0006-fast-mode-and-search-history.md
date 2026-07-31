@@ -44,9 +44,9 @@ ceiling is `fast_timeout_secs` (20s by default).
 
 ### Search history is JSON Lines under `$XDG_STATE_HOME`
 
-`~/.local/state/faro/history.jsonl`, one object per search, append-only, capped
-at 500 entries and compacted on load. `$FARO_HISTORY` overrides the path and is
-the test seam, mirroring `$FARO_CONFIG`.
+`~/.local/state/muaddib/history.jsonl`, one object per search, append-only, capped
+at 500 entries and compacted on load. `$MUADDIB_HISTORY` overrides the path and is
+the test seam, mirroring `$MUADDIB_CONFIG`.
 
 `Up`/`Down` walk it from the search bar; `Ctrl+L` clears it, arming on the first
 press and deleting on the second.
@@ -58,7 +58,7 @@ press and deleting on the second.
   `claude` + `haiku`: `rust async runtime tradeoffs` went from ~166s to ~31s
   (5.3x); `capital of peru` from ~29s to ~19s.
 - **The five-second goal was not met, and cannot be met here.** Live measurement
-  showed the cost is not faro's: one `claude -p` call spends ~2s on process start
+  showed the cost is not muaddib's: one `claude -p` call spends ~2s on process start
   and 15–30s inside its own agent loop (large system prompt, thinking block, web
   search, second thinking block), regardless of prompt size. Hitting 5s would
   require calling a model API directly rather than driving an agent CLI —

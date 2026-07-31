@@ -5,7 +5,7 @@
 
 ## Context
 
-faro must be fast, light, and run many concurrent subprocess searches while
+muaddib must be fast, light, and run many concurrent subprocess searches while
 keeping a responsive terminal interface. The product requirement named Rust
 explicitly and asked for maximum performance and parallel queries.
 
@@ -34,6 +34,6 @@ small, fast binary.
 - **Textual (Python)** — richer widgets, but a heavyweight runtime and no story
   for the required performance profile.
 - **Bubble Tea (Go)** — good model, but the requirement named Rust.
-- **egui/iced (GUI)** — not a terminal application; faro is explicitly a TUI.
+- **egui/iced (GUI)** — not a terminal application; muaddib is explicitly a TUI.
 - **Direct crossterm without ratatouille** — more control, far more code for
   layout, diffing, and widgets that ratatouille provides for free.

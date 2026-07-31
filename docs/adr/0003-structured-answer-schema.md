@@ -23,7 +23,7 @@ the synthesis call and the renderer:
 The compact JSON Schema (`ANSWER_SCHEMA`) is enforced by `--json-schema` on
 engines that support it and inlined into the prompt otherwise. Unknown block
 types deserialize to a `Unknown` variant and are skipped, so newer engines can
-emit newer blocks without breaking older faro binaries.
+emit newer blocks without breaking older muaddib binaries.
 
 ## Consequences
 

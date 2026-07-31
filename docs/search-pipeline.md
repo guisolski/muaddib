@@ -130,7 +130,7 @@ Against `claude` + `haiku`, wall clock:
 | `rust async runtime tradeoffs` (3 sub-searches) | ~166s | ~31s |
 
 A 5.3x improvement on a real query — but **not the "under five seconds" this mode
-was aimed at, and the gap is structural.** faro's own overhead is negligible; the
+was aimed at, and the gap is structural.** muaddib's own overhead is negligible; the
 cost lives inside one `claude -p` invocation: process start (~2s), a large agent
 system prompt, a thinking block, the `WebSearch` round-trip, and a second
 thinking block before the structured answer. That is 15–30s regardless of how
