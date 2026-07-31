@@ -1,5 +1,5 @@
 use crate::core::answer::{Answer, Block, Emphasis};
-use crate::tui::app::Pulse;
+use crate::tui::search_state::Pulse;
 use crate::tui::theme;
 use crate::tui::view::doc::DocAnim;
 use ratatui::style::Style;

@@ -1,6 +1,7 @@
 use crate::tui::anim;
-use crate::tui::app::{App, Focus, ImageFetch};
+use crate::tui::app::{App, Focus};
 use crate::tui::images::ImageRuntime;
+use crate::tui::search_state::ImageFetch;
 use crate::tui::theme;
 use crate::tui::view::doc::{self, DocSelection, IMAGE_ROWS, ImageSlot};
 use ratatui::Frame;
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [content, footer] =
         Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(frame.area());
-    let Some(answer) = &app.answer else {
+    let Some(answer) = &app.search.answer else {
         frame.render_widget(
             Paragraph::new(Line::styled("no answer to show", theme::dim())).centered(),
             content,
@@ -28,18 +29,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     };
     let block_anim = anim::doc_anim(
         answer,
-        app.reveal_started,
-        app.pulse,
+        app.search.reveal_started,
+        app.search.pulse,
         app.tick,
         app.config.animations,
     );
     let rendered = doc::render_doc(
         answer,
         width,
-        &app.links,
+        &app.search.links,
         selection,
         &block_anim,
-        &app.images,
+        &app.search.images,
     );
     let [padded] = Layout::horizontal([Constraint::Length(width)])
         .flex(ratatui::layout::Flex::Center)
@@ -51,7 +52,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_images(
         frame,
         &mut app.image_runtime,
-        &app.images,
+        &app.search.images,
         &rendered.image_slots,
         app.scroll,
         padded,

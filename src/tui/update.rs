@@ -1,11 +1,12 @@
 use crate::core::mode::MODES;
 use crate::pipeline::SearchEvent;
 use crate::tui::app::{
-    App, ConfigField, ConfigForm, Focus, ImageFetch, LANGUAGES, Overlay, Pulse, Screen,
-    SubQueryState, Viewport, configured_model_idx, model_choices,
+    App, ConfigField, ConfigForm, Focus, LANGUAGES, Overlay, Screen, Viewport,
+    configured_model_idx, model_choices,
 };
 use crate::tui::event::{AppEvent, Command};
 use crate::tui::keymap::{Action, Scope, resolve};
+use crate::tui::search_state::{Pulse, SearchOutcome};
 use crate::tui::view::doc::{self, DocAnim, DocSelection};
 use crossterm::event::KeyEvent;
 
@@ -135,7 +136,7 @@ fn perform(app: &mut App, action: Action) -> Option<Command> {
         Action::NewSearch => {
             app.screen = Screen::Home;
             app.input.reset();
-            app.answer = None;
+            app.search.answer = None;
             None
         }
         Action::RefineSearch => {
@@ -182,7 +183,7 @@ fn go_back(app: &mut App) -> Option<Command> {
         }
         Screen::Searching => {
             app.screen = Screen::Home;
-            app.synthesizing = false;
+            app.search.synthesizing = false;
             Some(Command::CancelSearch)
         }
         Screen::Results => {
@@ -193,7 +194,7 @@ fn go_back(app: &mut App) -> Option<Command> {
 }
 
 fn back_from_home(app: &mut App) {
-    if app.answer.is_some() {
+    if app.search.answer.is_some() {
         app.screen = Screen::Results;
     } else {
         app.input.reset();
@@ -297,7 +298,7 @@ fn cycle_focus(app: &mut App, forward: bool) {
 }
 
 fn activate(app: &mut App) -> Option<Command> {
-    let answer = app.answer.as_ref()?;
+    let answer = app.search.answer.as_ref()?;
     match app.focus {
         Focus::Body => None,
         Focus::Sources(index) => answer
@@ -316,7 +317,7 @@ fn jump_to_source(app: &mut App, number: u8) {
     let index = usize::from(number).saturating_sub(1);
     if index < app.source_count() {
         app.focus = Focus::Sources(index);
-        app.pulse = Some(Pulse {
+        app.search.pulse = Some(Pulse {
             source: index,
             started: app.tick,
         });
@@ -325,7 +326,7 @@ fn jump_to_source(app: &mut App, number: u8) {
 }
 
 fn ensure_selection_visible(app: &mut App) {
-    let Some(answer) = &app.answer else {
+    let Some(answer) = &app.search.answer else {
         return;
     };
     let width = doc::content_width(app.viewport.width);
@@ -333,10 +334,10 @@ fn ensure_selection_visible(app: &mut App) {
     let rendered = doc::render_doc(
         answer,
         width,
-        &app.links,
+        &app.search.links,
         DocSelection::None,
         &settled,
-        &app.images,
+        &app.search.images,
     );
     let range = match app.focus {
         Focus::Body => None,
@@ -350,7 +351,7 @@ fn ensure_selection_visible(app: &mut App) {
 }
 
 fn max_scroll(app: &App) -> u16 {
-    let Some(answer) = &app.answer else {
+    let Some(answer) = &app.search.answer else {
         return 0;
     };
     let width = doc::content_width(app.viewport.width);
@@ -358,10 +359,10 @@ fn max_scroll(app: &App) -> u16 {
     let rendered = doc::render_doc(
         answer,
         width,
-        &app.links,
+        &app.search.links,
         DocSelection::None,
         &settled,
-        &app.images,
+        &app.search.images,
     );
     let total = u16::try_from(rendered.lines.len()).unwrap_or(u16::MAX);
     total.saturating_sub(doc::content_height(app.viewport.height))
@@ -512,50 +513,19 @@ fn confirm_config(app: &mut App) -> Option<Command> {
 }
 
 fn apply_search_event(app: &mut App, event: SearchEvent) -> Option<Command> {
-    match event {
-        SearchEvent::PlanReady(plan) => {
-            app.progress = vec![SubQueryState::Pending; plan.sub_queries.len()];
-            app.plan = Some(plan);
-        }
-        SearchEvent::SubQueryStarted { idx } => set_progress(app, idx, SubQueryState::Running),
-        SearchEvent::SubQueryFinished { idx, ok } => {
-            let state = if ok {
-                SubQueryState::Done
-            } else {
-                SubQueryState::Failed
-            };
-            set_progress(app, idx, state);
-        }
-        SearchEvent::SynthesisStarted => app.synthesizing = true,
-        SearchEvent::AnswerReady(answer) => {
-            app.answer = Some(*answer);
+    match app.search.apply_event(event, app.tick) {
+        SearchOutcome::AnswerReady => {
             app.screen = Screen::Results;
             app.scroll = 0;
             app.focus = Focus::Body;
-            app.reveal_started = Some(app.tick);
-            app.synthesizing = false;
         }
-        SearchEvent::LinkChecked { source_id, status } => {
-            app.links.insert(source_id, status);
-        }
-        SearchEvent::ImageFetched { url, bytes } => {
-            app.images
-                .insert(url, bytes.map_or(ImageFetch::Failed, ImageFetch::Ready));
-        }
-        SearchEvent::Completed => app.synthesizing = false,
-        SearchEvent::Failed(message) => {
+        SearchOutcome::Failed(message) => {
             app.notice = Some(message);
             app.screen = Screen::Home;
-            app.synthesizing = false;
         }
+        SearchOutcome::Completed | SearchOutcome::None => {}
     }
     None
-}
-
-fn set_progress(app: &mut App, idx: usize, state: SubQueryState) {
-    if let Some(slot) = app.progress.get_mut(idx) {
-        *slot = state;
-    }
 }
 
 #[cfg(test)]
@@ -566,7 +536,7 @@ mod tests {
     use crate::core::mode::Mode;
     use crate::core::plan::{SearchPlan, SubQuery};
     use crate::engines::{ENGINES, EngineStatus};
-    use crate::tui::app::Pulse;
+    use crate::tui::search_state::{ImageFetch, SubQueryState};
     use crossterm::event::{KeyCode, KeyModifiers};
     use std::path::PathBuf;
 
@@ -654,7 +624,7 @@ mod tests {
 
     fn results_app(answer: Answer, height: u16) -> App {
         let mut app = app();
-        app.answer = Some(answer);
+        app.search.answer = Some(answer);
         app.screen = Screen::Results;
         app.viewport = Viewport { width: 40, height };
         app
@@ -914,7 +884,7 @@ mod tests {
             &mut app,
             AppEvent::Search(SearchEvent::AnswerReady(Box::new(interactive_answer()))),
         );
-        assert_eq!(app.reveal_started, Some(42));
+        assert_eq!(app.search.reveal_started, Some(42));
         app.viewport = Viewport {
             width: 40,
             height: 24,
@@ -922,15 +892,15 @@ mod tests {
         app.tick = 50;
         update(&mut app, key(KeyCode::Char('2')));
         assert_eq!(
-            app.pulse,
+            app.search.pulse,
             Some(Pulse {
                 source: 1,
                 started: 50,
             })
         );
         app.begin_search();
-        assert_eq!(app.reveal_started, None);
-        assert_eq!(app.pulse, None);
+        assert_eq!(app.search.reveal_started, None);
+        assert_eq!(app.search.pulse, None);
     }
 
     #[test]
@@ -997,19 +967,19 @@ mod tests {
             &mut app,
             AppEvent::Search(SearchEvent::PlanReady(sample_plan())),
         );
-        assert_eq!(app.progress, vec![SubQueryState::Pending; 2]);
+        assert_eq!(app.search.progress, vec![SubQueryState::Pending; 2]);
         update(
             &mut app,
             AppEvent::Search(SearchEvent::SubQueryStarted { idx: 0 }),
         );
-        assert_eq!(app.progress[0], SubQueryState::Running);
+        assert_eq!(app.search.progress[0], SubQueryState::Running);
         update(
             &mut app,
             AppEvent::Search(SearchEvent::SubQueryFinished { idx: 0, ok: true }),
         );
-        assert_eq!(app.progress[0], SubQueryState::Done);
+        assert_eq!(app.search.progress[0], SubQueryState::Done);
         update(&mut app, AppEvent::Search(SearchEvent::SynthesisStarted));
-        assert!(app.synthesizing);
+        assert!(app.search.synthesizing);
         app.focus = Focus::Sources(1);
         update(
             &mut app,
@@ -1017,7 +987,7 @@ mod tests {
         );
         assert_eq!(app.screen, Screen::Results);
         assert_eq!(app.focus, Focus::Body);
-        assert!(!app.synthesizing);
+        assert!(!app.search.synthesizing);
     }
 
     #[test]
@@ -1038,15 +1008,15 @@ mod tests {
             }),
         );
         assert_eq!(
-            app.images.get("https://img.example/a.png"),
+            app.search.images.get("https://img.example/a.png"),
             Some(&ImageFetch::Ready(vec![1, 2, 3]))
         );
         assert_eq!(
-            app.images.get("https://img.example/b.png"),
+            app.search.images.get("https://img.example/b.png"),
             Some(&ImageFetch::Failed)
         );
         app.begin_search();
-        assert!(app.images.is_empty());
+        assert!(app.search.images.is_empty());
     }
 
     #[test]
@@ -1073,13 +1043,13 @@ mod tests {
     #[test]
     fn refine_search_can_return_to_the_previous_results() {
         let mut app = app();
-        app.answer = Some(sample_answer());
+        app.search.answer = Some(sample_answer());
         app.screen = Screen::Results;
         update(&mut app, key(KeyCode::Char('/')));
         assert_eq!(app.screen, Screen::Home);
         update(&mut app, key(KeyCode::Esc));
         assert_eq!(app.screen, Screen::Results);
-        assert!(app.answer.is_some());
+        assert!(app.search.answer.is_some());
     }
 
     #[test]

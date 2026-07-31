@@ -3,6 +3,7 @@ pub mod app;
 pub mod event;
 pub mod images;
 pub mod keymap;
+pub mod search_state;
 pub mod theme;
 pub mod update;
 pub mod view;
@@ -72,7 +73,7 @@ async fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> a
                 }
             }
             _ = ticker.tick() => AppEvent::Tick,
-            search_event = next_search_event(app.search.as_mut().map(|handle| &mut handle.events)) => {
+            search_event = next_search_event(app.search.events_mut()) => {
                 if let Some(event) = search_event {
                     AppEvent::Search(event)
                 } else {
@@ -135,7 +136,7 @@ fn start_search(app: &mut App, query: &str) {
             app.begin_search();
             app.notice = notice;
             record_history(app, query);
-            app.search = Some(spawn_search(Arc::new(engine), request));
+            app.search.handle = Some(spawn_search(Arc::new(engine), request));
         }
     }
 }

@@ -1,6 +1,6 @@
 use crate::core::answer::{Answer, Block, ListItem, Source};
 use crate::pipeline::LinkStatus;
-use crate::tui::app::ImageFetch;
+use crate::tui::search_state::ImageFetch;
 use crate::tui::theme;
 use crate::tui::widgets::chart::bar_chart_lines;
 use crate::tui::widgets::diagram::diagram_lines;

@@ -1,11 +1,13 @@
 use crate::pipeline::search::FAST_TARGET_SECS;
-use crate::tui::app::{App, SubQueryState};
+use crate::tui::app::App;
+use crate::tui::search_state::SubQueryState;
 use crate::tui::theme;
 use crate::tui::widgets::spinner;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use std::time::Instant;
 
 const PANEL_WIDTH: u16 = 70;
 
@@ -37,7 +39,7 @@ fn panel_lines(app: &App) -> Vec<Line<'static>> {
     lines.push(Line::from(header));
     lines.push(Line::default());
     lines.extend(sub_query_lines(app));
-    if app.synthesizing {
+    if app.search.synthesizing {
         lines.push(Line::default());
         lines.push(Line::from(vec![
             Span::styled(spinner::frame(app.tick).to_string(), theme::citation()),
@@ -50,15 +52,14 @@ fn panel_lines(app: &App) -> Vec<Line<'static>> {
 }
 
 fn query_text(app: &App) -> String {
-    app.plan.as_ref().map_or_else(
+    app.search.plan.as_ref().map_or_else(
         || app.input.value().to_string(),
         |plan| plan.original.clone(),
     )
 }
 
 fn elapsed_secs(app: &App) -> u64 {
-    app.started_at
-        .map_or(0, |started| started.elapsed().as_secs())
+    app.search.elapsed_secs(Instant::now())
 }
 
 fn elapsed_span(app: &App) -> Span<'static> {
@@ -72,18 +73,14 @@ fn elapsed_span(app: &App) -> Span<'static> {
 }
 
 fn sub_query_lines(app: &App) -> Vec<Line<'static>> {
-    let Some(plan) = &app.plan else {
+    let Some(plan) = &app.search.plan else {
         return vec![Line::styled("planning sub-queries…", theme::dim())];
     };
     plan.sub_queries
         .iter()
         .enumerate()
         .map(|(idx, sub)| {
-            let state = app
-                .progress
-                .get(idx)
-                .copied()
-                .unwrap_or(SubQueryState::Pending);
+            let state = app.search.sub_query_state(idx);
             Line::from(vec![
                 state_glyph(state, app.tick),
                 Span::styled(format!(" [{}] ", sub.lang), theme::dim()),

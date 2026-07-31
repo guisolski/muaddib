@@ -1,11 +1,8 @@
-use crate::core::answer::Answer;
 use crate::core::config::{Config, MAX_PARALLEL, MIN_PARALLEL};
 use crate::core::mode::{MODES, Mode};
-use crate::core::plan::SearchPlan;
 use crate::engines::{EngineSpec, EngineStatus};
-use crate::pipeline::{LinkStatus, SearchHandle};
 use crate::tui::images::ImageRuntime;
-use std::collections::HashMap;
+use crate::tui::search_state::SearchState;
 use std::time::Instant;
 use tui_input::Input;
 
@@ -40,30 +37,10 @@ pub enum Focus {
     Followups(usize),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Pulse {
-    pub source: usize,
-    pub started: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ImageFetch {
-    Ready(Vec<u8>),
-    Failed,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Overlay {
     Help,
     Config(ConfigForm),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubQueryState {
-    Pending,
-    Running,
-    Done,
-    Failed,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -174,22 +151,13 @@ pub struct App {
     pub history_idx: Option<usize>,
     pub history_draft: String,
     pub clear_history_armed: bool,
-    pub plan: Option<SearchPlan>,
-    pub progress: Vec<SubQueryState>,
-    pub synthesizing: bool,
-    pub answer: Option<Answer>,
-    pub links: HashMap<u32, LinkStatus>,
-    pub images: HashMap<String, ImageFetch>,
+    pub search: SearchState,
     pub image_runtime: ImageRuntime,
     pub viewport: Viewport,
     pub scroll: u16,
     pub focus: Focus,
-    pub reveal_started: Option<u64>,
-    pub pulse: Option<Pulse>,
     pub tick: u64,
     pub notice: Option<String>,
-    pub search: Option<SearchHandle>,
-    pub started_at: Option<Instant>,
 }
 
 impl App {
@@ -214,22 +182,13 @@ impl App {
             history_idx: None,
             history_draft: String::new(),
             clear_history_armed: false,
-            plan: None,
-            progress: Vec::new(),
-            synthesizing: false,
-            answer: None,
-            links: HashMap::new(),
-            images: HashMap::new(),
+            search: SearchState::default(),
             image_runtime: ImageRuntime::default(),
             viewport: Viewport::default(),
             scroll: 0,
             focus: Focus::Body,
-            reveal_started: None,
-            pulse: None,
             tick: 0,
             notice: None,
-            search: None,
-            started_at: None,
         }
     }
 
@@ -239,24 +198,15 @@ impl App {
 
     pub fn begin_search(&mut self) {
         self.screen = Screen::Searching;
-        self.plan = None;
-        self.progress.clear();
-        self.synthesizing = false;
-        self.answer = None;
-        self.links.clear();
-        self.images.clear();
+        self.search.begin(Instant::now());
         self.image_runtime.clear();
         self.scroll = 0;
         self.focus = Focus::Body;
-        self.reveal_started = None;
-        self.pulse = None;
         self.notice = None;
-        self.started_at = Some(Instant::now());
     }
 
     pub fn end_search(&mut self) {
-        self.search = None;
-        self.synthesizing = false;
+        self.search.end();
     }
 
     pub fn selected_engine(&self) -> Option<&EngineStatus> {
@@ -266,13 +216,15 @@ impl App {
     }
 
     pub fn source_count(&self) -> usize {
-        self.answer
+        self.search
+            .answer
             .as_ref()
             .map_or(0, |answer| answer.sources.len())
     }
 
     pub fn followup_count(&self) -> usize {
-        self.answer
+        self.search
+            .answer
             .as_ref()
             .map_or(0, |answer| answer.followups.len())
     }
