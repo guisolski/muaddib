@@ -5,7 +5,7 @@ use crate::tui::theme;
 use crate::tui::view::doc::{self, DocSelection, IMAGE_ROWS, ImageSlot};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use ratatui_image::{CropOptions, Resize, StatefulImage};
 use std::collections::HashMap;
@@ -56,10 +56,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         app.scroll,
         padded,
     );
-    frame.render_widget(
-        Paragraph::new(Line::styled(footer_hint(app.focus), theme::dim())).centered(),
-        footer,
-    );
+    frame.render_widget(Paragraph::new(footer_line(app)).centered(), footer);
+}
+
+fn footer_line(app: &App) -> Line<'static> {
+    let hint = Span::styled(footer_hint(app.focus), theme::dim());
+    if app.fast {
+        Line::from(vec![Span::styled("⚡ ", theme::warn()), hint])
+    } else {
+        Line::from(hint)
+    }
 }
 
 fn draw_images(

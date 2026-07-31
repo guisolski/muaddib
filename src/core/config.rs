@@ -6,6 +6,8 @@ pub const MIN_PARALLEL: u8 = 1;
 pub const MAX_PARALLEL: u8 = 8;
 pub const MAX_BREADTH: u8 = 8;
 pub const MODE_DEFAULT_BREADTH: u8 = 0;
+pub const MIN_FAST_TIMEOUT_SECS: u64 = 5;
+pub const MAX_FAST_TIMEOUT_SECS: u64 = 120;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -18,6 +20,7 @@ pub struct Config {
     pub images: bool,
     pub animations: bool,
     pub engine_timeout_secs: u64,
+    pub fast_timeout_secs: u64,
     pub engines: BTreeMap<String, EngineOverride>,
 }
 
@@ -26,11 +29,12 @@ pub struct Config {
 pub struct EngineOverride {
     pub bin: Option<PathBuf>,
     pub model: Option<String>,
+    pub fast_model: Option<String>,
 }
 
 impl EngineOverride {
     fn is_empty(&self) -> bool {
-        self.bin.is_none() && self.model.is_none()
+        self.bin.is_none() && self.model.is_none() && self.fast_model.is_none()
     }
 }
 
@@ -45,6 +49,7 @@ impl Default for Config {
             images: true,
             animations: true,
             engine_timeout_secs: 180,
+            fast_timeout_secs: 45,
             engines: BTreeMap::new(),
         }
     }
@@ -63,6 +68,12 @@ impl Config {
             .and_then(|entry| entry.model.as_deref())
     }
 
+    pub fn fast_model_override(&self, engine_name: &str) -> Option<&str> {
+        self.engines
+            .get(engine_name)
+            .and_then(|entry| entry.fast_model.as_deref())
+    }
+
     pub fn set_model_override(&mut self, engine_name: &str, model: Option<String>) {
         let entry = self.engines.entry(engine_name.to_string()).or_default();
         entry.model = model;
@@ -79,6 +90,9 @@ pub fn parse_config(toml_text: &str) -> Result<Config, toml::de::Error> {
 pub fn clamp_config(mut config: Config) -> Config {
     config.max_parallel = config.max_parallel.clamp(MIN_PARALLEL, MAX_PARALLEL);
     config.expansion_breadth = config.expansion_breadth.min(MAX_BREADTH);
+    config.fast_timeout_secs = config
+        .fast_timeout_secs
+        .clamp(MIN_FAST_TIMEOUT_SECS, MAX_FAST_TIMEOUT_SECS);
     config
 }
 
@@ -209,6 +223,59 @@ mod tests {
     }
 
     #[test]
+    fn fast_timeout_parses_defaults_and_clamps() {
+        struct Case {
+            name: &'static str,
+            input: &'static str,
+            want: u64,
+        }
+        let cases = [
+            Case {
+                name: "absent key uses the default",
+                input: "",
+                want: 45,
+            },
+            Case {
+                name: "explicit value is kept",
+                input: "fast_timeout_secs = 30",
+                want: 30,
+            },
+            Case {
+                name: "too low is clamped up",
+                input: "fast_timeout_secs = 0",
+                want: MIN_FAST_TIMEOUT_SECS,
+            },
+            Case {
+                name: "too high is clamped down",
+                input: "fast_timeout_secs = 9000",
+                want: MAX_FAST_TIMEOUT_SECS,
+            },
+        ];
+        for case in cases {
+            let config = parse_config(case.input).unwrap();
+            assert_eq!(config.fast_timeout_secs, case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn engine_fast_model_override_round_trips() {
+        let text = "[engines.claude]\nmodel = \"opus\"\nfast_model = \"haiku\"";
+        let config = parse_config(text).unwrap();
+        assert_eq!(config.fast_model_override("claude"), Some("haiku"));
+        assert_eq!(config.model_override("claude"), Some("opus"));
+        assert_eq!(config.fast_model_override("codex"), None);
+    }
+
+    #[test]
+    fn clearing_the_model_keeps_a_fast_model_entry() {
+        let mut config =
+            parse_config("[engines.claude]\nmodel = \"opus\"\nfast_model = \"haiku\"").unwrap();
+        config.set_model_override("claude", None);
+        assert_eq!(config.model_override("claude"), None);
+        assert_eq!(config.fast_model_override("claude"), Some("haiku"));
+    }
+
+    #[test]
     fn malformed_toml_is_an_error() {
         assert!(parse_config("language = ").is_err());
     }
@@ -297,6 +364,7 @@ mod tests {
                 EngineOverride {
                     bin: Some(PathBuf::from("/tmp/fake")),
                     model: Some("sonnet".to_string()),
+                    fast_model: Some("haiku".to_string()),
                 },
             )]),
             ..Config::default()

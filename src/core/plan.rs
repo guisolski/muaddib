@@ -25,6 +25,15 @@ pub fn effective_breadth(mode: Mode, override_breadth: u8) -> u8 {
     }
 }
 
+pub fn literal_plan(original: &str, mode: Mode, answer_lang: &str) -> SearchPlan {
+    SearchPlan {
+        original: original.to_string(),
+        mode,
+        answer_lang: answer_lang.to_string(),
+        sub_queries: vec![literal_subquery(original, answer_lang)],
+    }
+}
+
 pub fn plan_from_expansion(
     original: &str,
     mode: Mode,

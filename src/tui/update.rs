@@ -42,15 +42,32 @@ fn handle_key(app: &mut App, key: &KeyEvent) -> Option<Command> {
     let scope = scope_of(app);
     let Some(action) = resolve(scope, key) else {
         forward_key_to_input(app, scope, key);
+        disarm_clear_history(app);
         return None;
     };
+    if action != Action::ClearHistory {
+        disarm_clear_history(app);
+    }
     perform(app, action)
 }
 
 fn forward_key_to_input(app: &mut App, scope: Scope, key: &KeyEvent) {
     if scope == Scope::Home {
         use tui_input::backend::crossterm::EventHandler;
-        app.input.handle_event(&crossterm::event::Event::Key(*key));
+        if app
+            .input
+            .handle_event(&crossterm::event::Event::Key(*key))
+            .is_some()
+        {
+            app.history_idx = None;
+        }
+    }
+}
+
+fn disarm_clear_history(app: &mut App) {
+    if app.clear_history_armed {
+        app.clear_history_armed = false;
+        app.notice = None;
     }
 }
 
@@ -125,6 +142,19 @@ fn perform(app: &mut App, action: Action) -> Option<Command> {
             app.screen = Screen::Home;
             None
         }
+        Action::HistoryPrev => {
+            recall_older(app);
+            None
+        }
+        Action::HistoryNext => {
+            recall_newer(app);
+            None
+        }
+        Action::ClearHistory => request_history_clear(app),
+        Action::ToggleFast => {
+            app.fast = !app.fast;
+            None
+        }
         Action::FieldNext | Action::FieldPrev | Action::ValueNext | Action::ValuePrev => {
             edit_config_form(app, action);
             None
@@ -168,6 +198,52 @@ fn back_from_home(app: &mut App) {
     } else {
         app.input.reset();
     }
+}
+
+fn recall_older(app: &mut App) {
+    let Some(last) = app.history.len().checked_sub(1) else {
+        return;
+    };
+    let index = match app.history_idx {
+        None => {
+            app.history_draft = app.input.value().to_string();
+            0
+        }
+        Some(current) => (current + 1).min(last),
+    };
+    app.history_idx = Some(index);
+    app.input = tui_input::Input::new(app.history[index].clone());
+}
+
+fn recall_newer(app: &mut App) {
+    let Some(current) = app.history_idx else {
+        return;
+    };
+    if let Some(index) = current.checked_sub(1) {
+        app.history_idx = Some(index);
+        app.input = tui_input::Input::new(app.history[index].clone());
+    } else {
+        app.history_idx = None;
+        app.input = tui_input::Input::new(app.history_draft.clone());
+    }
+}
+
+fn request_history_clear(app: &mut App) -> Option<Command> {
+    if app.history.is_empty() {
+        app.notice = Some("no search history".to_string());
+        return None;
+    }
+    if app.clear_history_armed {
+        app.clear_history_armed = false;
+        app.notice = None;
+        return Some(Command::ClearHistory);
+    }
+    app.clear_history_armed = true;
+    app.notice = Some(format!(
+        "press Ctrl+L again to clear {} searches",
+        app.history.len()
+    ));
+    None
 }
 
 fn submit_query(app: &mut App) -> Option<Command> {
@@ -507,7 +583,13 @@ mod tests {
     }
 
     fn app() -> App {
-        App::new(Config::default(), statuses(), None)
+        App::new(Config::default(), statuses(), None, false)
+    }
+
+    fn app_with_history(entries: &[&str]) -> App {
+        let mut app = app();
+        app.history = entries.iter().map(ToString::to_string).collect();
+        app
     }
 
     fn key(code: KeyCode) -> AppEvent {
@@ -1099,6 +1181,152 @@ mod tests {
             panic!("config overlay open");
         };
         assert_eq!(form.engine_idx, 0);
+    }
+
+    fn type_query(app: &mut App, text: &str) {
+        for character in text.chars() {
+            update(app, key(KeyCode::Char(character)));
+        }
+    }
+
+    #[test]
+    fn arrow_keys_walk_the_search_history_newest_first() {
+        struct Case {
+            name: &'static str,
+            presses: &'static [KeyCode],
+            want: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "one up recalls the newest",
+                presses: &[KeyCode::Up],
+                want: "gamma",
+            },
+            Case {
+                name: "two ups reach the second entry",
+                presses: &[KeyCode::Up, KeyCode::Up],
+                want: "beta",
+            },
+            Case {
+                name: "up stops at the oldest entry",
+                presses: &[KeyCode::Up, KeyCode::Up, KeyCode::Up, KeyCode::Up],
+                want: "alpha",
+            },
+            Case {
+                name: "down walks back toward the newest",
+                presses: &[KeyCode::Up, KeyCode::Up, KeyCode::Down],
+                want: "gamma",
+            },
+            Case {
+                name: "down alone does nothing",
+                presses: &[KeyCode::Down],
+                want: "",
+            },
+        ];
+        for case in cases {
+            let mut app = app_with_history(&["gamma", "beta", "alpha"]);
+            for press in case.presses {
+                update(&mut app, key(*press));
+            }
+            assert_eq!(app.input.value(), case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn stepping_past_the_newest_entry_restores_the_draft() {
+        let mut app = app_with_history(&["gamma", "beta"]);
+        type_query(&mut app, "half typed");
+        update(&mut app, key(KeyCode::Up));
+        assert_eq!(app.input.value(), "gamma");
+        update(&mut app, key(KeyCode::Down));
+        assert_eq!(app.input.value(), "half typed");
+        assert_eq!(app.history_idx, None);
+    }
+
+    #[test]
+    fn typing_after_a_recall_leaves_history_navigation() {
+        let mut app = app_with_history(&["gamma", "beta"]);
+        update(&mut app, key(KeyCode::Up));
+        assert_eq!(app.history_idx, Some(0));
+        type_query(&mut app, "!");
+        assert_eq!(app.history_idx, None);
+        assert_eq!(app.input.value(), "gamma!");
+        update(&mut app, key(KeyCode::Up));
+        assert_eq!(app.input.value(), "gamma");
+        update(&mut app, key(KeyCode::Down));
+        assert_eq!(app.input.value(), "gamma!");
+    }
+
+    #[test]
+    fn history_recall_is_inert_when_nothing_was_searched() {
+        let mut app = app();
+        type_query(&mut app, "fresh");
+        update(&mut app, key(KeyCode::Up));
+        assert_eq!(app.input.value(), "fresh");
+        assert_eq!(app.history_idx, None);
+    }
+
+    #[test]
+    fn clearing_history_takes_two_presses() {
+        let mut app = app_with_history(&["gamma", "beta"]);
+        assert_eq!(update(&mut app, ctrl('l')), None);
+        assert!(app.clear_history_armed);
+        assert_eq!(
+            app.notice.as_deref(),
+            Some("press Ctrl+L again to clear 2 searches")
+        );
+        assert_eq!(update(&mut app, ctrl('l')), Some(Command::ClearHistory));
+        assert!(!app.clear_history_armed);
+        assert_eq!(app.notice, None);
+    }
+
+    #[test]
+    fn any_other_key_disarms_the_history_clear() {
+        struct Case {
+            name: &'static str,
+            interruption: KeyCode,
+        }
+        let cases = [
+            Case {
+                name: "typing a character",
+                interruption: KeyCode::Char('x'),
+            },
+            Case {
+                name: "recalling history",
+                interruption: KeyCode::Up,
+            },
+            Case {
+                name: "cycling the mode",
+                interruption: KeyCode::Tab,
+            },
+        ];
+        for case in cases {
+            let mut app = app_with_history(&["gamma"]);
+            update(&mut app, ctrl('l'));
+            update(&mut app, key(case.interruption));
+            assert!(!app.clear_history_armed, "{}", case.name);
+            assert_eq!(app.notice, None, "{}", case.name);
+            assert_eq!(update(&mut app, ctrl('l')), None, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn clearing_an_empty_history_reports_instead_of_arming() {
+        let mut app = app();
+        assert_eq!(update(&mut app, ctrl('l')), None);
+        assert!(!app.clear_history_armed);
+        assert_eq!(app.notice.as_deref(), Some("no search history"));
+    }
+
+    #[test]
+    fn ctrl_f_toggles_fast_mode_from_home_and_results() {
+        let mut app = app();
+        assert!(!app.fast);
+        update(&mut app, ctrl('f'));
+        assert!(app.fast);
+        app.screen = Screen::Results;
+        update(&mut app, ctrl('f'));
+        assert!(!app.fast);
     }
 
     #[test]

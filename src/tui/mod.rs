@@ -10,9 +10,11 @@ pub mod widgets;
 
 use crate::config_store;
 use crate::core::config::Config;
+use crate::core::history::{push_recall, repeats_latest};
 use crate::core::mode::Mode;
 use crate::engines::cli::CliEngine;
-use crate::engines::{EngineStatus, choose_engine};
+use crate::engines::{EngineSpec, EngineStatus, choose_engine};
+use crate::history_store;
 use crate::pipeline::SearchEvent;
 use crate::pipeline::search::{SearchRequest, spawn_search};
 use crate::tui::app::App;
@@ -31,11 +33,13 @@ pub async fn run(
     statuses: Vec<EngineStatus>,
     initial_query: Option<String>,
     initial_mode: Option<Mode>,
+    fast: bool,
 ) -> anyhow::Result<()> {
-    let mut app = App::new(config, statuses, initial_mode);
+    let mut app = App::new(config, statuses, initial_mode, fast);
+    app.history = history_store::load_recall();
     if let Some(query) = initial_query {
         app.input = tui_input::Input::new(query.clone());
-        start_search(&mut app, query);
+        start_search(&mut app, &query);
     }
     let mut terminal = ratatui::init();
     if let Ok(size) = terminal.size() {
@@ -105,31 +109,67 @@ async fn next_search_event(events: Option<&mut Receiver<SearchEvent>>) -> Option
 fn dispatch_command(app: &mut App, command: Command) -> bool {
     match command {
         Command::Quit => return true,
-        Command::StartSearch { query } => start_search(app, query),
+        Command::StartSearch { query } => start_search(app, &query),
         Command::CancelSearch => app.end_search(),
         Command::OpenUrl(url) => open_url(&url),
         Command::SaveConfig => save_config(app),
+        Command::ClearHistory => clear_history(app),
     }
     false
 }
 
-fn start_search(app: &mut App, query: String) {
+fn start_search(app: &mut App, query: &str) {
     match choose_engine(&app.statuses, &app.config.engine) {
         Err(error) => app.notice = Some(error.to_string()),
         Ok((status, notice)) => {
             let Some(engine) = CliEngine::from_status(status) else {
                 return;
             };
-            let engine = engine.with_model(
-                app.config
-                    .model_override(status.spec.name)
-                    .map(str::to_string),
+            let engine = engine.with_model(search_model(&app.config, status.spec, app.fast));
+            let request = SearchRequest::from_config(
+                query.to_string(),
+                app.current_mode(),
+                app.fast,
+                &app.config,
             );
-            let request = SearchRequest::from_config(query, app.current_mode(), &app.config);
             app.begin_search();
             app.notice = notice;
+            record_history(app, query);
             app.search = Some(spawn_search(Arc::new(engine), request));
         }
+    }
+}
+
+fn search_model(config: &Config, spec: &EngineSpec, fast: bool) -> Option<String> {
+    if fast && let Some(model) = config.fast_model_override(spec.name).or(spec.fast_model) {
+        return Some(model.to_string());
+    }
+    config.model_override(spec.name).map(str::to_string)
+}
+
+fn record_history(app: &mut App, query: &str) {
+    app.history_idx = None;
+    let repeat = repeats_latest(&app.history, query);
+    push_recall(&mut app.history, query);
+    if repeat {
+        return;
+    }
+    let entry = history_store::stamped_entry(query, app.current_mode(), app.fast);
+    if let Err(error) = history_store::append(&entry) {
+        app.notice = Some(format!("failed to save history: {error}"));
+    }
+}
+
+fn clear_history(app: &mut App) {
+    let count = app.history.len();
+    match history_store::clear() {
+        Ok(()) => {
+            app.history.clear();
+            app.history_draft.clear();
+            app.history_idx = None;
+            app.notice = Some(format!("search history cleared ({count} entries)"));
+        }
+        Err(error) => app.notice = Some(format!("failed to clear history: {error}")),
     }
 }
 

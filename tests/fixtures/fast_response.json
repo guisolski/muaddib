@@ -1,0 +1,7 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "result": "{\"title\":\"Rust async runtimes\",\"language\":\"en\",\"blocks\":[{\"type\":\"paragraph\",\"text\":\"Tokio is the most widely used async runtime.\",\"source_ids\":[1]},{\"type\":\"image\",\"url\":\"https://tokio.rs/logo.png\",\"caption\":\"logo\",\"source_ids\":[1]},{\"type\":\"paragraph\",\"text\":\"This claim cites a source the answer never declared.\",\"source_ids\":[7]}],\"sources\":[{\"id\":1,\"title\":\"Tokio documentation\",\"url\":\"https://tokio.rs/tokio/tutorial\",\"lang\":\"en\"},{\"id\":7,\"title\":\"Bogus\",\"url\":\"not-a-url\",\"lang\":\"en\"}],\"followups\":[\"tokio scheduler internals\"]}",
+  "session_id": "0000-fixture"
+}

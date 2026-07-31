@@ -1,3 +1,4 @@
+use crate::pipeline::search::FAST_TARGET_SECS;
 use crate::tui::app::{App, SubQueryState};
 use crate::tui::theme;
 use crate::tui::widgets::spinner;
@@ -25,11 +26,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
 fn panel_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    lines.push(Line::from(vec![
+    let mut header = vec![
         Span::styled(spinner::frame(app.tick).to_string(), theme::citation()),
         Span::styled(format!(" searching: {}", query_text(app)), theme::title()),
-        Span::styled(format!("  {}s", elapsed_secs(app)), theme::dim()),
-    ]));
+    ];
+    if app.fast {
+        header.push(Span::styled(" ⚡ fast", theme::warn()));
+    }
+    header.push(elapsed_span(app));
+    lines.push(Line::from(header));
     lines.push(Line::default());
     lines.extend(sub_query_lines(app));
     if app.synthesizing {
@@ -54,6 +59,16 @@ fn query_text(app: &App) -> String {
 fn elapsed_secs(app: &App) -> u64 {
     app.started_at
         .map_or(0, |started| started.elapsed().as_secs())
+}
+
+fn elapsed_span(app: &App) -> Span<'static> {
+    let elapsed = elapsed_secs(app);
+    let style = if app.fast && elapsed >= FAST_TARGET_SECS {
+        theme::warn()
+    } else {
+        theme::dim()
+    };
+    Span::styled(format!("  {elapsed}s"), style)
 }
 
 fn sub_query_lines(app: &App) -> Vec<Line<'static>> {

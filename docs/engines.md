@@ -7,12 +7,12 @@ subprocesses, reusing their authentication and their built-in web access.
 
 Every engine is one row in `ENGINES` (`src/engines/mod.rs`):
 
-| name | binary | argv (before the prompt) | parse strategy | JSON schema |
-|---|---|---|---|---|
-| `claude` | `claude` | `-p --output-format json --allowedTools=WebSearch,WebFetch` | `ClaudeJson` | ✓ `--json-schema` |
-| `cursor-agent` | `cursor-agent` | `-p --output-format json` | `GenericJson` | prompt-enforced |
-| `codex` | `codex` | `exec --skip-git-repo-check` | `RawText` | prompt-enforced |
-| `opencode` | `opencode` | `run` | `RawText` | prompt-enforced |
+| name | binary | argv (before the prompt) | parse strategy | JSON schema | fast model |
+|---|---|---|---|---|---|
+| `claude` | `claude` | `-p --output-format json --allowedTools=WebSearch,WebFetch` | `ClaudeJson` | ✓ `--json-schema` | `haiku` |
+| `cursor-agent` | `cursor-agent` | `-p --output-format json` | `GenericJson` | prompt-enforced | — |
+| `codex` | `codex` | `exec --skip-git-repo-check` | `RawText` | prompt-enforced | — |
+| `opencode` | `opencode` | `run` | `RawText` | prompt-enforced | — |
 
 `build_args` appends the prompt as the **last argv element** — never through a
 shell, so there is no injection surface. When a model is configured (config
@@ -23,6 +23,13 @@ modal's choices. For engines with `supports_json_schema`,
 the synthesis call also appends `--json-schema <schema>` so the CLI itself
 validates the structured output; other engines get the schema inlined in the
 prompt text instead.
+
+The `fast_model` column is the model fast mode picks by default. Only `claude`
+ships one, because it is the only engine whose model lineup has an unambiguous
+"small and quick" tier; the others keep their normal model unless you set
+`[engines.<name>] fast_model` yourself. Resolution order in fast mode:
+`fast_model` from the config → the table's `fast_model` → the configured `model`
+→ the CLI's own default.
 
 > `--allowedTools` must use the `=` form: the flag is variadic in the claude CLI
 > and would otherwise swallow the trailing prompt argument (found the hard way,

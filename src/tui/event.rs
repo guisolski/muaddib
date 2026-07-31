@@ -15,5 +15,6 @@ pub enum Command {
     CancelSearch,
     OpenUrl(String),
     SaveConfig,
+    ClearHistory,
     Quit,
 }

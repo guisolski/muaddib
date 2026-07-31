@@ -26,13 +26,26 @@ fn request() -> SearchRequest {
         breadth: 4,
         max_parallel: 4,
         engine_timeout: Duration::from_secs(20),
+        fast: false,
+        fast_timeout: Duration::from_secs(20),
         validate_links: false,
         fetch_images: false,
     }
 }
 
+fn fast_request() -> SearchRequest {
+    SearchRequest {
+        fast: true,
+        ..request()
+    }
+}
+
 async fn collect_events(script: &str) -> Vec<SearchEvent> {
-    let mut handle = spawn_search(fake_engine(script), request());
+    drain(script, request()).await
+}
+
+async fn drain(script: &str, request: SearchRequest) -> Vec<SearchEvent> {
+    let mut handle = spawn_search(fake_engine(script), request);
     let mut events = Vec::new();
     while let Some(event) = handle.events.recv().await {
         events.push(event);
@@ -119,4 +132,51 @@ async fn subprocess_pipeline_ejects_sources_absent_from_findings() {
         })
         .count();
     assert_eq!(cited_paragraphs, 2);
+}
+
+#[tokio::test]
+async fn fast_mode_answers_from_one_subprocess_call() {
+    let events = drain("fake-engine.sh", fast_request()).await;
+    assert!(matches!(events.first(), Some(SearchEvent::PlanReady(_))));
+    assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+    let Some(SearchEvent::PlanReady(plan)) = events.first() else {
+        panic!("expected PlanReady first");
+    };
+    assert_eq!(plan.sub_queries.len(), 1);
+    assert_eq!(plan.sub_queries[0].query, "rust async runtimes");
+    let started = events
+        .iter()
+        .filter(|event| matches!(event, SearchEvent::SubQueryStarted { .. }))
+        .count();
+    assert_eq!(started, 1);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SearchEvent::SynthesisStarted))
+    );
+}
+
+#[tokio::test]
+async fn fast_mode_strips_images_and_undeclared_sources() {
+    let events = drain("fake-engine.sh", fast_request()).await;
+    let answer = events
+        .iter()
+        .find_map(|event| match event {
+            SearchEvent::AnswerReady(answer) => Some(answer),
+            _ => None,
+        })
+        .expect("pipeline produced an answer");
+    assert_eq!(answer.title, "Rust async runtimes");
+    let urls: Vec<&str> = answer
+        .sources
+        .iter()
+        .map(|source| source.url.as_str())
+        .collect();
+    assert_eq!(urls, vec!["https://tokio.rs/tokio/tutorial"]);
+    assert!(
+        !answer
+            .blocks
+            .iter()
+            .any(|block| matches!(block, faro::core::answer::Block::Image { .. }))
+    );
 }

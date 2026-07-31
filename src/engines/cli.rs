@@ -103,6 +103,7 @@ mod tests {
         supports_json_schema: false,
         model_flag: None,
         models: &[],
+        fast_model: None,
         install_hint: "",
     };
 
@@ -115,6 +116,7 @@ mod tests {
         supports_json_schema: false,
         model_flag: None,
         models: &[],
+        fast_model: None,
         install_hint: "",
     };
 
@@ -127,6 +129,7 @@ mod tests {
         supports_json_schema: false,
         model_flag: None,
         models: &[],
+        fast_model: None,
         install_hint: "",
     };
 
@@ -154,6 +157,7 @@ mod tests {
         supports_json_schema: false,
         model_flag: Some("--model"),
         models: &["fast"],
+        fast_model: None,
         install_hint: "",
     };
 

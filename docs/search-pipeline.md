@@ -4,6 +4,9 @@
 citation logic is pure (`src/core/`); the pipeline only sequences engine calls
 and emits events.
 
+`request.fast` selects a second, much shorter path — see
+[Fast mode](#fast-mode-one-call) below.
+
 ## Stages
 
 ### 1. Expand
@@ -25,9 +28,12 @@ breadth. **Any failure degrades, never aborts**: a per-mode fallback facet table
 Breadth comes from the mode (`General` 3, `Scientific` 4, `News` 3, `Deep` 6)
 unless `expansion_breadth` overrides it (1–8). A `"simple"` complexity rating —
 the model judging that one direct search fully answers the query — narrows the
-plan to a single sub-query, so simple questions skip the fan-out cost entirely
-and reach synthesis with a small findings payload. An absent, unknown, or
-malformed rating keeps the full breadth.
+plan to a single sub-query, so synthesis gets a small findings payload. An
+absent, unknown, or malformed rating keeps the full breadth.
+
+Note what this rating does *not* save: sub-searches already run concurrently, so
+collapsing N of them to one leaves the three serial engine round-trips intact.
+Cutting round-trips is what fast mode is for.
 
 ### 2. Fan-out
 
@@ -90,6 +96,71 @@ iTerm2, sixel) and falls back to unicode half-blocks everywhere else; a failed
 fetch degrades to an "image unavailable" note. Headless `--print` runs skip
 this stage — the JSON answer carries the image URLs themselves.
 
+## Fast mode: one call
+
+`Ctrl+F` in the TUI, `--fast` on the CLI. `run_stages` branches into
+`run_fast_stages`, which collapses stages 1–4 into a single engine call:
+
+1. **Plan locally.** `literal_plan` (pure) wraps the query as the one and only
+   sub-query. No engine call, so `PlanReady` reaches the UI in the first frame.
+2. **One call.** `fast_prompt` asks for one web search, at most 4 consulted
+   pages, at most two short paragraphs or one list, and *only* heading, paragraph,
+   and list blocks. The contract is `FAST_ANSWER_SCHEMA` — the same `Answer`
+   type, with chart, diagram, image, quote, and table stripped out. It is under
+   a third the size of `ANSWER_SCHEMA`, which matters twice: it is inlined into
+   the prompt for engines without `--json-schema`, and it constrains claude's
+   structured output more tightly.
+3. **Guard the output.** `strip_image_blocks` removes any image the model emitted
+   anyway; `renumber_sources` then runs against `self_declared_urls(&answer)` —
+   the answer's own `sources`, filtered to real `http(s)` URLs.
+4. **Validate links** as usual (stage 5). Stage 6 never runs: `from_config`
+   forces `fetch_images = false` whenever `fast` is set.
+
+The model comes from `[engines.<name>] fast_model`, else the engine table's
+`fast_model` (only `claude` has one: `haiku`), else the normal configured model.
+The timeout is `fast_timeout_secs` (default 20s, clamped 5..=120).
+
+### Measured latency, and why 5s is out of reach
+
+Against `claude` + `haiku`, wall clock:
+
+| Query | Standard | Fast |
+|---|---|---|
+| `capital of peru` (rated `simple`) | ~29s | ~19s |
+| `rust async runtime tradeoffs` (3 sub-searches) | ~166s | ~31s |
+
+A 5.3x improvement on a real query — but **not the "under five seconds" this mode
+was aimed at, and the gap is structural.** faro's own overhead is negligible; the
+cost lives inside one `claude -p` invocation: process start (~2s), a large agent
+system prompt, a thinking block, the `WebSearch` round-trip, and a second
+thinking block before the structured answer. That is 15–30s regardless of how
+short the prompt is. Reaching 5s would mean calling a model API directly instead
+of driving an agent CLI — which is exactly the tradeoff ADR-0002 rejected.
+
+`FAST_TARGET_SECS` (5s) is therefore only a UI threshold: it decides when the
+elapsed counter turns yellow. Nothing is aborted at 5s, and `fast_timeout_secs`
+defaults to 45s so a normal fast search never trips it.
+
+### The double-generation trap
+
+Both `output_contract` and `fast_output_contract` tell schema-capable engines to
+**call the `StructuredOutput` tool**, never to "reply with only JSON". Those two
+instructions look equivalent and are not: asking for text while `--json-schema`
+is active makes the model write the whole answer as a fenced block, get told it
+must use the tool, and then generate the entire answer a second time. Measured on
+a fast search, that was 4 turns and 18.9s instead of 3 turns and 15.0s — and it
+was silently costing every standard synthesis call too.
+
+### What fast mode gives up
+
+Standard mode cross-checks synthesized URLs against URLs the sub-searches
+actually returned — two independent engine calls have to agree before a source
+survives. Fast mode has only one call, so there is no second set to check
+against: it relies on the prompt's "never invent or guess a URL" rule plus the
+post-render link validation to flag anything dead. Trading that cross-check for
+latency is the whole point of the mode, and it is why fast mode is a deliberate
+opt-in rather than the default.
+
 ## Event protocol
 
 ```rust
@@ -119,6 +190,8 @@ that is all Esc does.
 | All sub-queries fail | `Failed("every sub-query failed…")` |
 | No findings with usable URLs | `Failed("…no findings with usable sources")` |
 | Synthesis fails / invalid JSON | `Failed` with the reason |
+| Fast call fails, times out, or returns invalid JSON | `Failed("fast search …")`; nothing to degrade to |
+| Fast answer cites a source it never declared | citation dropped, source ejected |
 | Synthesis invents a URL | source ejected, citation dropped |
 | Synthesis invents an image URL | image block removed from the answer |
 | Link check fails | source marked ✗, answer unaffected |

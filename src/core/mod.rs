@@ -2,6 +2,7 @@ pub mod answer;
 pub mod citations;
 pub mod config;
 pub mod extract;
+pub mod history;
 pub mod mode;
 pub mod plan;
 pub mod prompts;

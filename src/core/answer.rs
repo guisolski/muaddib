@@ -310,6 +310,73 @@ pub const ANSWER_SCHEMA: &str = r##"{
   }
 }"##;
 
+pub const FAST_ANSWER_SCHEMA: &str = r##"{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["title", "language", "blocks", "sources"],
+  "properties": {
+    "title": {"type": "string"},
+    "language": {"type": "string"},
+    "blocks": {"type": "array", "maxItems": 4, "items": {"$ref": "#/definitions/block"}},
+    "sources": {"type": "array", "maxItems": 4, "items": {"$ref": "#/definitions/source"}},
+    "followups": {"type": "array", "items": {"type": "string"}, "maxItems": 3}
+  },
+  "definitions": {
+    "source_ids": {"type": "array", "items": {"type": "integer", "minimum": 1}},
+    "source": {
+      "type": "object",
+      "required": ["id", "title", "url"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1},
+        "title": {"type": "string"},
+        "url": {"type": "string"},
+        "lang": {"type": "string"}
+      }
+    },
+    "block": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "text"],
+          "properties": {
+            "type": {"const": "heading"},
+            "level": {"type": "integer", "minimum": 1, "maximum": 3},
+            "text": {"type": "string"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "text", "source_ids"],
+          "properties": {
+            "type": {"const": "paragraph"},
+            "text": {"type": "string"},
+            "source_ids": {"$ref": "#/definitions/source_ids"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "items"],
+          "properties": {
+            "type": {"const": "list"},
+            "ordered": {"type": "boolean"},
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["text", "source_ids"],
+                "properties": {
+                  "text": {"type": "string"},
+                  "source_ids": {"$ref": "#/definitions/source_ids"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}"##;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,5 +701,41 @@ mod tests {
             let block_type = block["type"].as_str().unwrap().to_string();
             assert!(declared.contains(&block_type), "{block_type}");
         }
+    }
+
+    #[test]
+    fn fast_schema_admits_only_prose_blocks() {
+        let schema: serde_json::Value = serde_json::from_str(FAST_ANSWER_SCHEMA).unwrap();
+        assert_eq!(schema["type"], "object");
+        let declared: Vec<&str> = schema["definitions"]["block"]["oneOf"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|variant| variant["properties"]["type"]["const"].as_str().unwrap())
+            .collect();
+        assert_eq!(declared, vec!["heading", "paragraph", "list"]);
+    }
+
+    #[test]
+    fn fast_schema_is_smaller_than_the_full_schema() {
+        assert!(FAST_ANSWER_SCHEMA.len() < ANSWER_SCHEMA.len() / 2);
+    }
+
+    #[test]
+    fn fast_schema_output_parses_into_the_shared_answer_type() {
+        let value = json!({
+            "title": "Capital of Peru",
+            "language": "en",
+            "blocks": [
+                {"type": "paragraph", "text": "Lima is the capital.", "source_ids": [1]},
+                {"type": "list", "ordered": false, "items": [{"text": "Founded 1535", "source_ids": [1]}]}
+            ],
+            "sources": [{"id": 1, "title": "Britannica", "url": "https://example.com/lima"}],
+            "followups": ["population of lima"]
+        });
+        let answer = parse_answer(value).unwrap();
+        assert_eq!(answer.blocks.len(), 2);
+        assert_eq!(answer.sources.len(), 1);
+        assert!(!answer.blocks.contains(&Block::Unknown));
     }
 }

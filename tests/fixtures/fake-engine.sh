@@ -7,6 +7,7 @@ for arg in "$@"; do
     *"FARO:EXPAND"*) marker="expansion" ;;
     *"FARO:SUBSEARCH"*) marker="subsearch" ;;
     *"FARO:SYNTH"*) marker="synthesis" ;;
+    *"FARO:FAST"*) marker="fast" ;;
   esac
 done
 if [ -z "$marker" ]; then

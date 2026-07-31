@@ -30,6 +30,10 @@ pub enum Action {
     JumpToSource(u8),
     NewSearch,
     RefineSearch,
+    HistoryPrev,
+    HistoryNext,
+    ClearHistory,
+    ToggleFast,
     FieldNext,
     FieldPrev,
     ValueNext,
@@ -111,6 +115,34 @@ pub const KEYMAP: &[KeyBinding] = &[
         KeyModifiers::SHIFT,
         Action::PrevMode,
         "previous mode",
+    ),
+    bind(
+        Scope::Home,
+        KeyCode::Up,
+        KeyModifiers::NONE,
+        Action::HistoryPrev,
+        "previous search",
+    ),
+    bind(
+        Scope::Home,
+        KeyCode::Down,
+        KeyModifiers::NONE,
+        Action::HistoryNext,
+        "next search",
+    ),
+    bind(
+        Scope::Home,
+        KeyCode::Char('l'),
+        KeyModifiers::CONTROL,
+        Action::ClearHistory,
+        "clear search history",
+    ),
+    bind(
+        Scope::Home,
+        KeyCode::Char('f'),
+        KeyModifiers::CONTROL,
+        Action::ToggleFast,
+        "toggle fast mode",
     ),
     bind(
         Scope::Results,
@@ -209,6 +241,13 @@ pub const KEYMAP: &[KeyBinding] = &[
         KeyModifiers::NONE,
         Action::RefineSearch,
         "refine search",
+    ),
+    bind(
+        Scope::Results,
+        KeyCode::Char('f'),
+        KeyModifiers::CONTROL,
+        Action::ToggleFast,
+        "toggle fast mode",
     ),
     bind(
         Scope::Results,
@@ -403,6 +442,75 @@ mod tests {
                 scope: Scope::Results,
                 key: KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT),
                 want: Some(Action::ScrollBottom),
+            },
+        ];
+        for case in cases {
+            assert_eq!(resolve(case.scope, &case.key), case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn history_and_fast_bindings_live_where_they_belong() {
+        struct Case {
+            name: &'static str,
+            scope: Scope,
+            key: KeyEvent,
+            want: Option<Action>,
+        }
+        let cases = [
+            Case {
+                name: "up recalls history on home",
+                scope: Scope::Home,
+                key: KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                want: Some(Action::HistoryPrev),
+            },
+            Case {
+                name: "down walks history forward on home",
+                scope: Scope::Home,
+                key: KeyEvent::new(KeyCode::Down, KeyModifiers::NONE),
+                want: Some(Action::HistoryNext),
+            },
+            Case {
+                name: "up still scrolls on results",
+                scope: Scope::Results,
+                key: KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                want: Some(Action::ScrollUp),
+            },
+            Case {
+                name: "up still moves fields in a modal",
+                scope: Scope::Modal,
+                key: KeyEvent::new(KeyCode::Up, KeyModifiers::NONE),
+                want: Some(Action::FieldPrev),
+            },
+            Case {
+                name: "ctrl-l clears history from home",
+                scope: Scope::Home,
+                key: KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+                want: Some(Action::ClearHistory),
+            },
+            Case {
+                name: "ctrl-l is not bound outside home",
+                scope: Scope::Results,
+                key: KeyEvent::new(KeyCode::Char('l'), KeyModifiers::CONTROL),
+                want: None,
+            },
+            Case {
+                name: "ctrl-f toggles fast mode on home",
+                scope: Scope::Home,
+                key: KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+                want: Some(Action::ToggleFast),
+            },
+            Case {
+                name: "ctrl-f toggles fast mode on results",
+                scope: Scope::Results,
+                key: KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+                want: Some(Action::ToggleFast),
+            },
+            Case {
+                name: "ctrl-f is inert while a search runs",
+                scope: Scope::Searching,
+                key: KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL),
+                want: None,
             },
         ];
         for case in cases {

@@ -115,6 +115,22 @@ pub fn allowed_image_urls(merged: &MergedFindings) -> BTreeSet<String> {
         .collect()
 }
 
+pub fn self_declared_urls(answer: &Answer) -> BTreeSet<String> {
+    answer
+        .sources
+        .iter()
+        .filter(|source| is_valid_source_url(&source.url))
+        .map(|source| normalize_url(&source.url))
+        .collect()
+}
+
+pub fn strip_image_blocks(mut answer: Answer) -> Answer {
+    answer
+        .blocks
+        .retain(|block| !matches!(block, Block::Image { .. }));
+    answer
+}
+
 pub fn eject_unknown_images(mut answer: Answer, allowed: &BTreeSet<String>) -> Answer {
     answer.blocks.retain(|block| match block {
         Block::Image { url, .. } => allowed.contains(&normalize_url(url)),

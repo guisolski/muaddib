@@ -1,13 +1,16 @@
-use crate::core::answer::{ANSWER_SCHEMA, Answer, parse_answer};
+use crate::core::answer::{ANSWER_SCHEMA, Answer, FAST_ANSWER_SCHEMA, parse_answer};
 use crate::core::citations::{
     MergedFindings, SubResult, allowed_image_urls, allowed_urls, eject_unknown_images,
-    merge_sub_results, parse_sub_response, renumber_sources,
+    merge_sub_results, parse_sub_response, renumber_sources, self_declared_urls,
+    strip_image_blocks,
 };
 use crate::core::config::Config;
 use crate::core::extract::extract_json;
 use crate::core::mode::{Mode, ModeSpec};
-use crate::core::plan::{SearchPlan, SubQuery, effective_breadth, plan_from_expansion};
-use crate::core::prompts::{expansion_prompt, sub_search_prompt, synthesis_prompt};
+use crate::core::plan::{
+    SearchPlan, SubQuery, effective_breadth, literal_plan, plan_from_expansion,
+};
+use crate::core::prompts::{expansion_prompt, fast_prompt, sub_search_prompt, synthesis_prompt};
 use crate::engines::{Engine, EngineJob};
 use crate::pipeline::{SearchEvent, SearchHandle};
 use futures::stream::{self, StreamExt};
@@ -16,6 +19,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub const EXPANSION_TIMEOUT: Duration = Duration::from_secs(45);
+pub const FAST_TARGET_SECS: u64 = 5;
 const EVENT_BUFFER: usize = 64;
 
 #[derive(Debug, Clone)]
@@ -26,12 +30,14 @@ pub struct SearchRequest {
     pub breadth: u8,
     pub max_parallel: usize,
     pub engine_timeout: Duration,
+    pub fast: bool,
+    pub fast_timeout: Duration,
     pub validate_links: bool,
     pub fetch_images: bool,
 }
 
 impl SearchRequest {
-    pub fn from_config(query: String, mode: Mode, config: &Config) -> Self {
+    pub fn from_config(query: String, mode: Mode, fast: bool, config: &Config) -> Self {
         Self {
             query,
             mode,
@@ -39,8 +45,10 @@ impl SearchRequest {
             breadth: effective_breadth(mode, config.expansion_breadth),
             max_parallel: usize::from(config.max_parallel),
             engine_timeout: Duration::from_secs(config.engine_timeout_secs),
+            fast,
+            fast_timeout: Duration::from_secs(config.fast_timeout_secs),
             validate_links: config.validate_links,
-            fetch_images: config.images,
+            fetch_images: config.images && !fast,
         }
     }
 }
@@ -71,6 +79,9 @@ async fn run_stages(
     request: &SearchRequest,
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Result<(), String> {
+    if request.fast {
+        return run_fast_stages(engine, request, tx).await;
+    }
     let plan = expansion_stage(engine, request).await;
     send(tx, SearchEvent::PlanReady(plan.clone())).await;
     let sub_results = fanout_stage(engine, &plan, request, tx).await;
@@ -87,6 +98,53 @@ async fn run_stages(
     link_validation_stage(&answer, request, tx).await;
     image_fetch_stage(&answer, request, tx).await;
     Ok(())
+}
+
+async fn run_fast_stages(
+    engine: &dyn Engine,
+    request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> Result<(), String> {
+    let plan = literal_plan(&request.query, request.mode, &request.answer_lang);
+    send(tx, SearchEvent::PlanReady(plan)).await;
+    send(tx, SearchEvent::SubQueryStarted { idx: 0 }).await;
+    let result = fast_answer_stage(engine, request).await;
+    send(
+        tx,
+        SearchEvent::SubQueryFinished {
+            idx: 0,
+            ok: result.is_ok(),
+        },
+    )
+    .await;
+    let answer = result?;
+    send(tx, SearchEvent::AnswerReady(Box::new(answer.clone()))).await;
+    link_validation_stage(&answer, request, tx).await;
+    Ok(())
+}
+
+async fn fast_answer_stage(engine: &dyn Engine, request: &SearchRequest) -> Result<Answer, String> {
+    let inline_schema = !engine.supports_json_schema();
+    let job = EngineJob {
+        prompt: fast_prompt(
+            &request.query,
+            request.mode.spec(),
+            &request.answer_lang,
+            inline_schema,
+        ),
+        schema: Some(FAST_ANSWER_SCHEMA),
+        timeout: request.fast_timeout,
+    };
+    let output = engine
+        .run(&job)
+        .await
+        .map_err(|error| format!("fast search failed: {error}"))?;
+    let value = extract_json(&output.text)
+        .ok_or_else(|| "fast search returned no parsable JSON".to_string())?;
+    let answer = parse_answer(value)
+        .map_err(|error| format!("fast search JSON did not match the answer schema: {error}"))?;
+    let allowed = self_declared_urls(&answer);
+    Ok(renumber_sources(strip_image_blocks(answer), &allowed))
 }
 
 async fn expansion_stage(engine: &dyn Engine, request: &SearchRequest) -> SearchPlan {
@@ -237,12 +295,16 @@ async fn image_fetch_stage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::prompts::{EXPANSION_MARKER, SUB_SEARCH_MARKER, SYNTHESIS_MARKER};
+    use crate::core::prompts::{
+        EXPANSION_MARKER, FAST_MARKER, SUB_SEARCH_MARKER, SYNTHESIS_MARKER,
+    };
     use crate::engines::{BoxedEngineFuture, EngineError, EngineOutput};
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct FakeEngine {
         fail_markers: Vec<&'static str>,
         simple_expansion: bool,
+        calls: AtomicUsize,
     }
 
     impl FakeEngine {
@@ -250,6 +312,7 @@ mod tests {
             Self {
                 fail_markers: vec![],
                 simple_expansion: false,
+                calls: AtomicUsize::new(0),
             }
         }
 
@@ -257,6 +320,7 @@ mod tests {
             Self {
                 fail_markers: markers.to_vec(),
                 simple_expansion: false,
+                calls: AtomicUsize::new(0),
             }
         }
 
@@ -264,6 +328,7 @@ mod tests {
             Self {
                 fail_markers: vec![],
                 simple_expansion: true,
+                calls: AtomicUsize::new(0),
             }
         }
 
@@ -301,16 +366,36 @@ mod tests {
                     "followups":["next question"]
                 }"#
                 .to_string(),
+                FAST_MARKER => r#"{
+                    "title":"Quick answer",
+                    "language":"en",
+                    "blocks":[
+                        {"type":"paragraph","text":"the short answer","source_ids":[1]},
+                        {"type":"image","url":"https://one.example/figure.png","source_ids":[1]},
+                        {"type":"paragraph","text":"unsupported claim","source_ids":[9]}
+                    ],
+                    "sources":[
+                        {"id":1,"title":"One","url":"https://one.example/a","lang":"en"},
+                        {"id":9,"title":"Bogus","url":"not-a-url","lang":"en"}
+                    ],
+                    "followups":["next question"]
+                }"#
+                .to_string(),
                 _ => panic!("prompt carries no known marker"),
             }
         }
     }
 
     fn marker_of(prompt: &str) -> &'static str {
-        [EXPANSION_MARKER, SUB_SEARCH_MARKER, SYNTHESIS_MARKER]
-            .into_iter()
-            .find(|marker| prompt.contains(marker))
-            .expect("prompt carries a routing marker")
+        [
+            EXPANSION_MARKER,
+            SUB_SEARCH_MARKER,
+            SYNTHESIS_MARKER,
+            FAST_MARKER,
+        ]
+        .into_iter()
+        .find(|marker| prompt.contains(marker))
+        .expect("prompt carries a routing marker")
     }
 
     impl Engine for FakeEngine {
@@ -320,6 +405,7 @@ mod tests {
 
         fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a> {
             Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
                 let marker = marker_of(&job.prompt);
                 if self.fail_markers.contains(&marker) {
                     return Err(EngineError::Reported(format!("forced failure: {marker}")));
@@ -339,18 +425,42 @@ mod tests {
             breadth: 3,
             max_parallel: 4,
             engine_timeout: Duration::from_secs(5),
+            fast: false,
+            fast_timeout: Duration::from_secs(5),
             validate_links: false,
             fetch_images: false,
         }
     }
 
+    fn fast_request() -> SearchRequest {
+        SearchRequest {
+            fast: true,
+            ..request()
+        }
+    }
+
     async fn collect_events(engine: FakeEngine) -> Vec<SearchEvent> {
-        let mut handle = spawn_search(Arc::new(engine), request());
+        drain(engine, request()).await.1
+    }
+
+    async fn drain(engine: FakeEngine, request: SearchRequest) -> (usize, Vec<SearchEvent>) {
+        let engine = Arc::new(engine);
+        let mut handle = spawn_search(engine.clone(), request);
         let mut events = Vec::new();
         while let Some(event) = handle.events.recv().await {
             events.push(event);
         }
+        (engine.calls.load(Ordering::SeqCst), events)
+    }
+
+    fn answer_in(events: &[SearchEvent]) -> &Answer {
         events
+            .iter()
+            .find_map(|event| match event {
+                SearchEvent::AnswerReady(answer) => Some(answer.as_ref()),
+                _ => None,
+            })
+            .expect("answer produced")
     }
 
     #[tokio::test]
@@ -473,6 +583,73 @@ mod tests {
         assert!(message.contains("synthesis failed"));
     }
 
+    #[tokio::test]
+    async fn fast_mode_answers_with_a_single_engine_call() {
+        let (calls, events) = drain(FakeEngine::reliable(), fast_request()).await;
+        assert_eq!(calls, 1);
+        assert!(matches!(events.first(), Some(SearchEvent::PlanReady(_))));
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::SynthesisStarted))
+        );
+        let started = events
+            .iter()
+            .filter(|event| matches!(event, SearchEvent::SubQueryStarted { .. }))
+            .count();
+        assert_eq!(started, 1);
+    }
+
+    #[tokio::test]
+    async fn fast_mode_plans_the_literal_query_without_expanding() {
+        let (_, events) = drain(FakeEngine::reliable(), fast_request()).await;
+        let Some(SearchEvent::PlanReady(plan)) = events.first() else {
+            panic!("expected PlanReady first");
+        };
+        assert_eq!(plan.sub_queries.len(), 1);
+        assert_eq!(plan.sub_queries[0].query, "rust async runtimes");
+        assert_eq!(plan.sub_queries[0].rationale, "literal query");
+    }
+
+    #[tokio::test]
+    async fn fast_mode_drops_images_and_sources_it_cannot_stand_behind() {
+        let (_, events) = drain(FakeEngine::reliable(), fast_request()).await;
+        let answer = answer_in(&events);
+        assert!(
+            !answer
+                .blocks
+                .iter()
+                .any(|block| matches!(block, crate::core::answer::Block::Image { .. }))
+        );
+        let urls: Vec<&str> = answer
+            .sources
+            .iter()
+            .map(|source| source.url.as_str())
+            .collect();
+        assert_eq!(urls, vec!["https://one.example/a"]);
+    }
+
+    #[tokio::test]
+    async fn fast_mode_failure_reports_a_search_failure() {
+        let (_, events) = drain(FakeEngine::failing_on(&[FAST_MARKER]), fast_request()).await;
+        let Some(SearchEvent::Failed(message)) = events.last() else {
+            panic!("expected Failed last");
+        };
+        assert!(message.contains("fast search failed"));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::SubQueryFinished { ok: false, .. }))
+        );
+    }
+
+    #[tokio::test]
+    async fn standard_mode_still_makes_three_engine_calls_for_a_simple_rating() {
+        let (calls, _) = drain(FakeEngine::rating_simple(), request()).await;
+        assert_eq!(calls, 3);
+    }
+
     #[test]
     fn request_from_config_applies_language_breadth_and_limits() {
         let config = Config {
@@ -483,12 +660,26 @@ mod tests {
             validate_links: false,
             ..Config::default()
         };
-        let request = SearchRequest::from_config("q".to_string(), Mode::Deep, &config);
+        let request = SearchRequest::from_config("q".to_string(), Mode::Deep, false, &config);
         assert_eq!(request.answer_lang, "fr");
         assert_eq!(request.breadth, 6);
         assert_eq!(request.max_parallel, 2);
         assert_eq!(request.engine_timeout, Duration::from_secs(30));
         assert!(!request.validate_links);
         assert!(request.fetch_images);
+        assert!(!request.fast);
+    }
+
+    #[test]
+    fn fast_request_carries_the_fast_timeout_and_disables_images() {
+        let config = Config {
+            fast_timeout_secs: 12,
+            images: true,
+            ..Config::default()
+        };
+        let request = SearchRequest::from_config("q".to_string(), Mode::General, true, &config);
+        assert!(request.fast);
+        assert_eq!(request.fast_timeout, Duration::from_secs(12));
+        assert!(!request.fetch_images);
     }
 }

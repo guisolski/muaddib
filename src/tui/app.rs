@@ -169,6 +169,11 @@ pub struct App {
     pub overlay: Option<Overlay>,
     pub input: Input,
     pub mode_idx: usize,
+    pub fast: bool,
+    pub history: Vec<String>,
+    pub history_idx: Option<usize>,
+    pub history_draft: String,
+    pub clear_history_armed: bool,
     pub plan: Option<SearchPlan>,
     pub progress: Vec<SubQueryState>,
     pub synthesizing: bool,
@@ -188,7 +193,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(config: Config, statuses: Vec<EngineStatus>, initial_mode: Option<Mode>) -> Self {
+    pub fn new(
+        config: Config,
+        statuses: Vec<EngineStatus>,
+        initial_mode: Option<Mode>,
+        fast: bool,
+    ) -> Self {
         let mode_idx = initial_mode
             .and_then(|mode| MODES.iter().position(|spec| spec.mode == mode))
             .unwrap_or(0);
@@ -199,6 +209,11 @@ impl App {
             overlay: None,
             input: Input::default(),
             mode_idx,
+            fast,
+            history: Vec::new(),
+            history_idx: None,
+            history_draft: String::new(),
+            clear_history_armed: false,
             plan: None,
             progress: Vec::new(),
             synthesizing: false,

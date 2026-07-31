@@ -2,12 +2,13 @@ use crate::core::mode::MODES;
 use crate::tui::app::App;
 use crate::tui::theme;
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::{Constraint, Flex, Layout, Margin, Rect};
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Paragraph};
 
 const MAX_INPUT_WIDTH: u16 = 64;
+const MIN_INPUT_WIDTH: u16 = 10;
 
 pub fn draw(frame: &mut Frame, app: &App) {
     let [
@@ -15,7 +16,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         gap,
         input_row,
         modes_row,
-        gap2,
+        fast_row,
         notice_row,
         status_row,
         hints_row,
@@ -31,10 +32,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     ])
     .flex(Flex::Center)
     .areas(frame.area());
-    let _ = (gap, gap2);
+    let _ = gap;
     frame.render_widget(wordmark_line(), wordmark_row);
     draw_input(frame, app, input_row);
     frame.render_widget(Paragraph::new(modes_line(app)).centered(), modes_row);
+    frame.render_widget(Paragraph::new(fast_line(app)).centered(), fast_row);
     if let Some(notice) = &app.notice {
         frame.render_widget(
             Paragraph::new(Line::styled(notice.clone(), theme::warn())).centered(),
@@ -50,24 +52,53 @@ fn wordmark_line() -> Paragraph<'static> {
 }
 
 fn draw_input(frame: &mut Frame, app: &App, row: Rect) {
-    let width = MAX_INPUT_WIDTH.min(row.width.saturating_sub(4)).max(10);
-    let [input_area] = Layout::horizontal([Constraint::Length(width)])
-        .flex(Flex::Center)
-        .areas(row);
-    let inner_width = usize::from(input_area.width.saturating_sub(2));
-    let scroll = app.input.visual_scroll(inner_width);
+    let input_area = input_box(row);
+    let scroll = app.input.visual_scroll(text_width(input_area));
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(theme::citation());
     let paragraph = Paragraph::new(app.input.value())
-        .scroll((0, scroll as u16))
+        .scroll((0, clamp_u16(scroll)))
         .block(block);
     frame.render_widget(paragraph, input_area);
-    let cursor_x = input_area.x + 1 + (app.input.visual_cursor().saturating_sub(scroll)) as u16;
-    frame.set_cursor_position((
-        cursor_x.min(input_area.right().saturating_sub(2)),
-        input_area.y + 1,
-    ));
+    if app.overlay.is_some() {
+        return;
+    }
+    let offset = app.input.visual_cursor().saturating_sub(scroll);
+    if let Some(position) = cursor_cell(input_area, offset) {
+        frame.set_cursor_position(position);
+    }
+}
+
+fn input_box(row: Rect) -> Rect {
+    let width = MAX_INPUT_WIDTH
+        .min(row.width.saturating_sub(4))
+        .max(MIN_INPUT_WIDTH)
+        .min(row.width);
+    let [input_area] = Layout::horizontal([Constraint::Length(width)])
+        .flex(Flex::Center)
+        .areas(row);
+    input_area
+}
+
+fn text_width(input_area: Rect) -> usize {
+    usize::from(input_area.width.saturating_sub(3))
+}
+
+fn cursor_cell(input_area: Rect, visual_offset: usize) -> Option<(u16, u16)> {
+    let inner = input_area.inner(Margin::new(1, 1));
+    if inner.is_empty() {
+        return None;
+    }
+    let column = inner
+        .x
+        .saturating_add(clamp_u16(visual_offset))
+        .min(inner.right().saturating_sub(1));
+    Some((column, inner.y))
+}
+
+fn clamp_u16(value: usize) -> u16 {
+    u16::try_from(value).unwrap_or(u16::MAX)
 }
 
 fn modes_line(app: &App) -> Line<'static> {
@@ -84,6 +115,14 @@ fn modes_line(app: &App) -> Line<'static> {
         spans.push(Span::styled(spec.label, style));
     }
     Line::from(spans)
+}
+
+fn fast_line(app: &App) -> Line<'static> {
+    if app.fast {
+        Line::styled("⚡ fast", theme::warn())
+    } else {
+        Line::styled("Ctrl+F fast", theme::dim())
+    }
 }
 
 fn status_line(app: &App) -> Line<'static> {
@@ -109,7 +148,173 @@ fn status_line(app: &App) -> Line<'static> {
 
 fn hints_line() -> Line<'static> {
     Line::styled(
-        "Enter search · Tab mode · Ctrl+O config · Ctrl+G help",
+        "Enter search · ↑ history · Tab mode · Ctrl+O config · Ctrl+G help",
         theme::dim(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn box_of(x: u16, y: u16, width: u16, height: u16) -> Rect {
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    #[test]
+    fn cursor_never_leaves_the_inner_rectangle() {
+        struct Case {
+            name: &'static str,
+            input_area: Rect,
+            offset: usize,
+            want: Option<(u16, u16)>,
+        }
+        let cases = [
+            Case {
+                name: "empty input sits on the first inner column",
+                input_area: box_of(4, 2, 20, 3),
+                offset: 0,
+                want: Some((5, 3)),
+            },
+            Case {
+                name: "offset advances one column at a time",
+                input_area: box_of(4, 2, 20, 3),
+                offset: 7,
+                want: Some((12, 3)),
+            },
+            Case {
+                name: "the last inner column is the ceiling",
+                input_area: box_of(4, 2, 20, 3),
+                offset: 17,
+                want: Some((22, 3)),
+            },
+            Case {
+                name: "a runaway offset still stops before the border",
+                input_area: box_of(4, 2, 20, 3),
+                offset: 9_999,
+                want: Some((22, 3)),
+            },
+            Case {
+                name: "a squeezed two row box has no inner row",
+                input_area: box_of(4, 2, 20, 2),
+                offset: 3,
+                want: None,
+            },
+            Case {
+                name: "a single row box has no inner row",
+                input_area: box_of(4, 2, 20, 1),
+                offset: 0,
+                want: None,
+            },
+            Case {
+                name: "a collapsed box has no inner cell",
+                input_area: box_of(4, 2, 0, 0),
+                offset: 0,
+                want: None,
+            },
+            Case {
+                name: "a two column box has no inner column",
+                input_area: box_of(4, 2, 2, 3),
+                offset: 0,
+                want: None,
+            },
+            Case {
+                name: "a three column box holds exactly one inner column",
+                input_area: box_of(4, 2, 3, 3),
+                offset: 5,
+                want: Some((5, 3)),
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                cursor_cell(case.input_area, case.offset),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn cursor_stays_inside_a_tall_box() {
+        let inner_row = cursor_cell(box_of(0, 0, 20, 9), 0).map(|(_, y)| y);
+        assert_eq!(inner_row, Some(1));
+    }
+
+    #[test]
+    fn text_width_reserves_the_borders_and_the_cursor_column() {
+        struct Case {
+            name: &'static str,
+            width: u16,
+            want: usize,
+        }
+        let cases = [
+            Case {
+                name: "typical box",
+                width: 64,
+                want: 61,
+            },
+            Case {
+                name: "minimum box",
+                width: MIN_INPUT_WIDTH,
+                want: 7,
+            },
+            Case {
+                name: "degenerate box never underflows",
+                width: 1,
+                want: 0,
+            },
+        ];
+        for case in cases {
+            let area = box_of(0, 0, case.width, 3);
+            assert_eq!(text_width(area), case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn input_box_never_exceeds_its_row() {
+        struct Case {
+            name: &'static str,
+            row_width: u16,
+            want: u16,
+        }
+        let cases = [
+            Case {
+                name: "wide terminal caps at the maximum",
+                row_width: 200,
+                want: MAX_INPUT_WIDTH,
+            },
+            Case {
+                name: "medium terminal leaves a margin",
+                row_width: 40,
+                want: 36,
+            },
+            Case {
+                name: "narrow terminal falls back to the minimum",
+                row_width: 12,
+                want: MIN_INPUT_WIDTH,
+            },
+            Case {
+                name: "tiny terminal never overflows the row",
+                row_width: 6,
+                want: 6,
+            },
+            Case {
+                name: "zero width row stays empty",
+                row_width: 0,
+                want: 0,
+            },
+        ];
+        for case in cases {
+            let row = box_of(0, 0, case.row_width, 3);
+            let area = input_box(row);
+            assert_eq!(area.width, case.want, "{}", case.name);
+            assert!(area.right() <= row.right(), "{}", case.name);
+        }
+    }
 }

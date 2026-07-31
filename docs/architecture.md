@@ -104,7 +104,8 @@ src/
 ├── main.rs           clap CLI, headless --print mode, TUI launch
 ├── lib.rs            public modules (integration tests build against this)
 ├── config_store.rs   config file resolution and persistence (FARO_CONFIG, XDG)
-├── core/             pure: mode, plan, prompts, extract, answer, citations, config
+├── history_store.rs  search history file: append, load, clear (FARO_HISTORY, XDG state)
+├── core/             pure: mode, plan, prompts, extract, answer, citations, config, history
 ├── engines/          EngineSpec table, Engine trait, CliEngine, output parsing
 ├── pipeline/         SearchEvent protocol, stage orchestration, link validation
 └── tui/              App state, reducer, keymap, theme, views, widgets

@@ -3,7 +3,8 @@ use faro::config_store;
 use faro::core::config::Config;
 use faro::core::mode::Mode;
 use faro::engines::cli::CliEngine;
-use faro::engines::{EngineStatus, choose_engine, detect_engines};
+use faro::engines::{EngineSpec, EngineStatus, choose_engine, detect_engines};
+use faro::history_store;
 use faro::pipeline::search::{SearchRequest, spawn_search};
 use faro::pipeline::{LinkStatus, SearchEvent};
 use std::process::ExitCode;
@@ -30,13 +31,25 @@ struct Cli {
     #[arg(long, help = "Answer language for this run, as a BCP-47 tag")]
     lang: Option<String>,
 
+    #[arg(
+        long,
+        help = "Answer from a single engine call, trading depth for speed"
+    )]
+    fast: bool,
+
     #[arg(long, help = "Run headless and print the answer JSON to stdout")]
     print: bool,
+
+    #[arg(long, help = "Erase the saved search history and exit")]
+    clear_history: bool,
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let cli = Cli::parse();
+    if cli.clear_history {
+        return clear_history();
+    }
     let (config, config_notice) = config_store::load_or_default();
     let config = apply_cli_overrides(config, &cli);
     if let Some(notice) = config_notice {
@@ -46,12 +59,26 @@ async fn main() -> ExitCode {
     if cli.print {
         run_headless(&cli, &config, &statuses).await
     } else {
-        match faro::tui::run(config, statuses, cli.query.clone(), cli.mode).await {
+        match faro::tui::run(config, statuses, cli.query.clone(), cli.mode, cli.fast).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("faro: {error}");
                 ExitCode::FAILURE
             }
+        }
+    }
+}
+
+fn clear_history() -> ExitCode {
+    let count = history_store::load_recall().len();
+    match history_store::clear() {
+        Ok(()) => {
+            eprintln!("faro: search history cleared ({count} entries)");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("faro: failed to clear history: {error}");
+            ExitCode::FAILURE
         }
     }
 }
@@ -84,13 +111,28 @@ async fn run_headless(cli: &Cli, config: &Config, statuses: &[EngineStatus]) -> 
     }
     let engine = CliEngine::from_status(status)
         .expect("an available engine has a resolved path")
-        .with_model(config.model_override(status.spec.name).map(str::to_string));
+        .with_model(headless_model(config, status.spec, cli.fast));
     let mode = cli.mode.unwrap_or(Mode::General);
     let request = SearchRequest {
         fetch_images: false,
-        ..SearchRequest::from_config(query, mode, config)
+        ..SearchRequest::from_config(query.clone(), mode, cli.fast, config)
     };
+    record_history(&query, mode, cli.fast);
     stream_search_to_stdio(Arc::new(engine), request).await
+}
+
+fn headless_model(config: &Config, spec: &EngineSpec, fast: bool) -> Option<String> {
+    if fast && let Some(model) = config.fast_model_override(spec.name).or(spec.fast_model) {
+        return Some(model.to_string());
+    }
+    config.model_override(spec.name).map(str::to_string)
+}
+
+fn record_history(query: &str, mode: Mode, fast: bool) {
+    let entry = history_store::stamped_entry(query, mode, fast);
+    if let Err(error) = history_store::append(&entry) {
+        eprintln!("faro: failed to save history: {error}");
+    }
 }
 
 fn report_missing_engines(statuses: &[EngineStatus]) {

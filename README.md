@@ -19,9 +19,10 @@ where **every claim carries a verified source link**.
                 │ why is the sky blue?                 │
                 ╰──────────────────────────────────────╯
                  General · Scientific · News · Deep
+                             ⚡ fast
 
                         claude ● · default · pt-BR
-          Enter search · Tab mode · Ctrl+O config · Ctrl+G help
+    Enter search · ↑ history · Tab mode · Ctrl+O config · Ctrl+G help
 ```
 
 ## Why faro?
@@ -44,8 +45,13 @@ where **every claim carries a verified source link**.
 - Minimalist TUI: one centered search bar, four focus modes (`General`, `Scientific`,
   `News`, `Deep`)
 - Multilingual query expansion with a deterministic offline fallback
+- Fast mode (`Ctrl+F` / `--fast`): one engine call instead of three, with a small
+  model and a trimmed answer schema — ~5x faster on real queries (31s vs 166s
+  measured on `claude`+`haiku`), and combines with any search mode
 - Model-decided fast path: simple questions are rated `simple` at expansion and
   run a single search instead of the full fan-out
+- Persistent search history: `↑`/`↓` recall past searches like a shell, `Ctrl+L`
+  clears it (asks once, then deletes)
 - Parallel fan-out with per-sub-query live progress
 - Structured answers: headings, paragraphs, lists, quotes, tables, terminal
   bar charts, and flow/timeline diagrams — all cited
@@ -88,7 +94,9 @@ faro "quantum computing"      # open the TUI and search immediately
 faro --mode scientific "CRISPR delivery methods"
 faro --lang en --engine claude "energia solar no brasil"
 faro --model haiku "capital of australia"   # pass a model to the engine CLI
+faro --fast "capital of peru"               # one engine call instead of three
 faro --print "rust 1.93 release highlights" > answer.json   # headless JSON
+faro --clear-history                        # erase the saved search history
 ```
 
 ### Keybindings
@@ -101,6 +109,9 @@ faro --print "rust 1.93 release highlights" > answer.json   # headless JSON
 | Everywhere | `Esc` | back / cancel search / close modal |
 | Home | `Enter` | search |
 | Home | `Tab` / `Shift+Tab` | cycle search mode |
+| Home | `↑` / `↓` | walk the search history (your unsent draft comes back at the end) |
+| Home | `Ctrl+L` | clear the whole search history — press once to ask, twice to delete |
+| Home, Results | `Ctrl+F` | toggle fast mode |
 | Results | `j`/`k`/`↓`/`↑` | scroll, or move the selection in the focused pane |
 | Results | `PgDn`/`PgUp`/`g`/`G` | page / top / bottom |
 | Results | `Tab` / `Shift+Tab` | cycle focus: body → sources → follow-ups |
@@ -168,11 +179,18 @@ validate_links = true       # HTTP HEAD check on every source
 images = true               # fetch and render answer images in the terminal
 animations = true           # staggered reveal, chart growth, pulses
 engine_timeout_secs = 180
+fast_timeout_secs = 45      # ceiling for the single fast-mode call (5-120)
 
 [engines.claude]            # optional per-engine overrides
 bin = "/custom/path/claude" # binary path
 model = "sonnet"            # model passed to the CLI (any value it accepts)
+fast_model = "haiku"        # model used in fast mode
 ```
+
+Search history lives separately, under the XDG *state* dir:
+`~/.local/state/faro/history.jsonl` (or `$XDG_STATE_HOME/faro/history.jsonl`, or
+`$FARO_HISTORY`). It is JSON Lines — one appended object per search, capped at 500
+entries, with unparsable lines skipped rather than fatal.
 
 ## Development
 
@@ -189,7 +207,7 @@ The project follows TDD with table-driven tests, a pure functional core (zero I/
 ## Roadmap
 
 - Video results as external links
-- Search history and answer cache
+- Answer cache
 - More engines (adding one is a single table row — see [docs/engines.md](docs/engines.md))
 
 ## License

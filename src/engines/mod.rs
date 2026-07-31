@@ -26,6 +26,7 @@ pub struct EngineSpec {
     pub supports_json_schema: bool,
     pub model_flag: Option<&'static str>,
     pub models: &'static [&'static str],
+    pub fast_model: Option<&'static str>,
     pub install_hint: &'static str,
 }
 
@@ -44,6 +45,7 @@ pub const ENGINES: &[EngineSpec] = &[
         supports_json_schema: true,
         model_flag: Some("--model"),
         models: &["opus", "sonnet", "haiku"],
+        fast_model: Some("haiku"),
         install_hint: "npm install -g @anthropic-ai/claude-code",
     },
     EngineSpec {
@@ -55,6 +57,7 @@ pub const ENGINES: &[EngineSpec] = &[
         supports_json_schema: false,
         model_flag: Some("--model"),
         models: &["auto", "gpt-5", "sonnet-4.5"],
+        fast_model: None,
         install_hint: "curl https://cursor.com/install -fsS | bash",
     },
     EngineSpec {
@@ -66,6 +69,7 @@ pub const ENGINES: &[EngineSpec] = &[
         supports_json_schema: false,
         model_flag: Some("--model"),
         models: &["gpt-5-codex", "gpt-5"],
+        fast_model: None,
         install_hint: "npm install -g @openai/codex",
     },
     EngineSpec {
@@ -77,6 +81,7 @@ pub const ENGINES: &[EngineSpec] = &[
         supports_json_schema: false,
         model_flag: Some("--model"),
         models: &["anthropic/claude-sonnet-4-5", "openai/gpt-5"],
+        fast_model: None,
         install_hint: "npm install -g opencode-ai",
     },
 ];

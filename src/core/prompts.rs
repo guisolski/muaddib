@@ -1,4 +1,4 @@
-use crate::core::answer::ANSWER_SCHEMA;
+use crate::core::answer::{ANSWER_SCHEMA, FAST_ANSWER_SCHEMA};
 use crate::core::citations::MergedFindings;
 use crate::core::mode::ModeSpec;
 use crate::core::plan::{SearchPlan, SubQuery};
@@ -6,6 +6,50 @@ use crate::core::plan::{SearchPlan, SubQuery};
 pub const EXPANSION_MARKER: &str = "FARO:EXPAND";
 pub const SUB_SEARCH_MARKER: &str = "FARO:SUBSEARCH";
 pub const SYNTHESIS_MARKER: &str = "FARO:SYNTH";
+pub const FAST_MARKER: &str = "FARO:FAST";
+
+pub fn fast_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, inline_schema: bool) -> String {
+    format!(
+        "[task {FAST_MARKER}] You are the fast lane of a meta-search engine. Speed is the \
+         priority: the whole answer must be produced in a few seconds.\n\
+         Run ONE web search for the query below, consult at most 4 pages, and answer immediately.\n\
+         Search mode: {label}. {instructions}\n\
+         Write the entire answer in {answer_lang}. Every title, paragraph, list item, and \
+         follow-up must be in {answer_lang}.\n\
+         Query: {query}\n\
+         Rules:\n\
+         - Keep it short: at most two brief paragraphs, or one paragraph plus one list.\n\
+         - Use only paragraph, list, and heading blocks. Never emit a chart, diagram, image, \
+         quote, or table block.\n\
+         - Every paragraph and list item must cite at least one source through its source_ids.\n\
+         - Only report URLs of pages you actually consulted; never invent or guess a URL.\n\
+         - Number sources starting at 1, at most 4 of them.\n\
+         - Suggest up to 3 follow-up queries in the followups array.\n\
+         - Do not run extra searches to broaden coverage; answer with what the first search \
+         gives you.\n\
+         {output_contract}",
+        label = mode.label,
+        instructions = mode.instructions,
+        output_contract = fast_output_contract(inline_schema),
+    )
+}
+
+fn fast_output_contract(inline_schema: bool) -> String {
+    if inline_schema {
+        format!(
+            "Reply with ONLY a JSON object matching this JSON Schema, no prose:\n{FAST_ANSWER_SCHEMA}"
+        )
+    } else {
+        structured_output_contract()
+    }
+}
+
+fn structured_output_contract() -> String {
+    "Return the answer by calling the StructuredOutput tool exactly once. \
+     Never write the JSON as text first: writing it out and then calling the tool \
+     generates the whole answer twice and doubles the wait."
+        .to_string()
+}
 
 pub fn expansion_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, breadth: u8) -> String {
     format!(
@@ -100,7 +144,7 @@ fn output_contract(inline_schema: bool) -> String {
             "Reply with ONLY a JSON object matching this JSON Schema, no prose:\n{ANSWER_SCHEMA}"
         )
     } else {
-        "Reply with ONLY the JSON answer object, no prose.".to_string()
+        structured_output_contract()
     }
 }
 
@@ -160,6 +204,11 @@ mod tests {
                 name: "synthesis",
                 prompt: synthesis_prompt(&sample_plan(), &sample_merged(), false),
                 marker: SYNTHESIS_MARKER,
+            },
+            Case {
+                name: "fast",
+                prompt: fast_prompt("q", mode, "en", false),
+                marker: FAST_MARKER,
             },
         ];
         for case in cases {
@@ -256,6 +305,89 @@ mod tests {
     }
 
     #[test]
+    fn fast_prompt_asks_for_one_search_and_bans_rich_blocks() {
+        let prompt = fast_prompt("capital of peru", Mode::General.spec(), "pt-BR", false);
+        assert!(prompt.contains("capital of peru"));
+        assert!(prompt.contains("pt-BR"));
+        assert!(prompt.contains("ONE web search"));
+        assert!(prompt.contains("at most 4 pages"));
+        assert!(prompt.contains("never invent or guess a URL"));
+        for banned in ["chart", "diagram", "image", "quote", "table"] {
+            assert!(prompt.contains(banned), "{banned}");
+        }
+        assert!(prompt.contains("Never emit a chart, diagram, image, quote, or table block."));
+    }
+
+    #[test]
+    fn fast_prompt_inlines_the_fast_schema_only_when_requested() {
+        let with_schema = fast_prompt("q", Mode::General.spec(), "en", true);
+        let without_schema = fast_prompt("q", Mode::General.spec(), "en", false);
+        assert!(with_schema.contains("$schema"));
+        assert!(!with_schema.contains("\"const\": \"chart\""));
+        assert!(!without_schema.contains("$schema"));
+        assert!(with_schema.len() < synthesis_prompt(&sample_plan(), &sample_merged(), true).len());
+    }
+
+    #[test]
+    fn schema_capable_engines_are_told_to_call_the_tool_not_write_json() {
+        struct Case {
+            name: &'static str,
+            prompt: String,
+        }
+        let cases = [
+            Case {
+                name: "synthesis",
+                prompt: synthesis_prompt(&sample_plan(), &sample_merged(), false),
+            },
+            Case {
+                name: "fast",
+                prompt: fast_prompt("q", Mode::General.spec(), "en", false),
+            },
+        ];
+        for case in cases {
+            assert!(
+                case.prompt
+                    .contains("calling the StructuredOutput tool exactly once"),
+                "{}",
+                case.name
+            );
+            assert!(
+                !case
+                    .prompt
+                    .contains("Reply with ONLY the JSON answer object"),
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn engines_without_schema_support_still_get_a_text_contract() {
+        struct Case {
+            name: &'static str,
+            prompt: String,
+        }
+        let cases = [
+            Case {
+                name: "synthesis",
+                prompt: synthesis_prompt(&sample_plan(), &sample_merged(), true),
+            },
+            Case {
+                name: "fast",
+                prompt: fast_prompt("q", Mode::General.spec(), "en", true),
+            },
+        ];
+        for case in cases {
+            assert!(
+                case.prompt.contains("Reply with ONLY a JSON object"),
+                "{}",
+                case.name
+            );
+            assert!(!case.prompt.contains("StructuredOutput"), "{}", case.name);
+        }
+    }
+
+    #[test]
     fn prompts_leave_no_unresolved_placeholders() {
         let placeholders = [
             "{query}",
@@ -263,10 +395,13 @@ mod tests {
             "{answer_lang}",
             "{original}",
             "{label}",
+            "{instructions}",
+            "{output_contract}",
         ];
         let prompts = [
             expansion_prompt("q", Mode::General.spec(), "en", 3),
             synthesis_prompt(&sample_plan(), &sample_merged(), true),
+            fast_prompt("q", Mode::General.spec(), "en", true),
         ];
         for prompt in &prompts {
             for placeholder in placeholders {
