@@ -2,6 +2,7 @@ use crate::core::citations::{
     Finding, MergedFindings, SubResult, SubSearchResponse, allowed_urls, is_valid_source_url,
     normalize_url,
 };
+use crate::core::config::WebSearchConfig;
 use crate::core::mode::Mode;
 use crate::core::plan::SubQuery;
 use std::collections::BTreeSet;
@@ -225,6 +226,14 @@ fn default_engines_for_mode(mode: Mode) -> Vec<&'static WebEngineSpec> {
         .find(|(candidate, _)| *candidate == mode)
         .map(|(_, ids)| ids.iter().copied().filter_map(engine_by_id).collect())
         .unwrap_or_default()
+}
+
+pub fn page_grounding_enabled(mode: Mode, config: &WebSearchConfig) -> bool {
+    config.enabled
+        && config
+            .ground_modes
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(mode.label()))
 }
 
 pub fn request_params(spec: &WebEngineSpec, query: &str, mailto: &str) -> Vec<(String, String)> {
@@ -732,6 +741,74 @@ mod tests {
         let engines = engines_for_mode(Mode::Scientific, &[]);
         assert_eq!(engines[0].category, WebCategory::Academic);
         assert!(engines.iter().any(|spec| spec.category == WebCategory::Web));
+    }
+
+    #[test]
+    fn page_grounding_follows_mode_list_and_master_switch() {
+        struct Case {
+            name: &'static str,
+            mode: Mode,
+            config: WebSearchConfig,
+            want: bool,
+        }
+        let cases = [
+            Case {
+                name: "scientific is grounded by default",
+                mode: Mode::Scientific,
+                config: WebSearchConfig::default(),
+                want: true,
+            },
+            Case {
+                name: "deep is grounded by default",
+                mode: Mode::Deep,
+                config: WebSearchConfig::default(),
+                want: true,
+            },
+            Case {
+                name: "general is not grounded by default",
+                mode: Mode::General,
+                config: WebSearchConfig::default(),
+                want: false,
+            },
+            Case {
+                name: "news is not grounded by default",
+                mode: Mode::News,
+                config: WebSearchConfig::default(),
+                want: false,
+            },
+            Case {
+                name: "explicit list overrides the defaults",
+                mode: Mode::General,
+                config: WebSearchConfig {
+                    ground_modes: vec!["General".to_string()],
+                    ..WebSearchConfig::default()
+                },
+                want: true,
+            },
+            Case {
+                name: "empty list disables grounding",
+                mode: Mode::Scientific,
+                config: WebSearchConfig {
+                    ground_modes: Vec::new(),
+                    ..WebSearchConfig::default()
+                },
+                want: false,
+            },
+            Case {
+                name: "disabled websearch wins over the list",
+                mode: Mode::Scientific,
+                config: WebSearchConfig::disabled(),
+                want: false,
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                page_grounding_enabled(case.mode, &case.config),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
     }
 
     #[test]

@@ -1,7 +1,8 @@
 use crate::core::mode::MODES;
+use crate::core::tree::{NodeId, NodeSeed};
 use crate::pipeline::SearchEvent;
 use crate::tui::app::{
-    App, ConfigField, ConfigForm, Focus, LANGUAGES, Overlay, Screen, Viewport,
+    App, ConfigField, ConfigForm, Focus, FollowUpForm, LANGUAGES, Overlay, Screen, Viewport,
     configured_model_idx, model_choices,
 };
 use crate::tui::event::{AppEvent, Command};
@@ -29,13 +30,16 @@ pub fn update(app: &mut App, event: AppEvent) -> Option<Command> {
 }
 
 fn scope_of(app: &App) -> Scope {
-    if app.overlay.is_some() {
-        return Scope::Modal;
+    match &app.overlay {
+        Some(Overlay::FollowUp(_)) => return Scope::FollowUp,
+        Some(_) => return Scope::Modal,
+        None => {}
     }
     match app.screen {
         Screen::Home => Scope::Home,
         Screen::Searching => Scope::Searching,
         Screen::Results => Scope::Results,
+        Screen::Tree => Scope::Tree,
     }
 }
 
@@ -53,15 +57,23 @@ fn handle_key(app: &mut App, key: &KeyEvent) -> Option<Command> {
 }
 
 fn forward_key_to_input(app: &mut App, scope: Scope, key: &KeyEvent) {
-    if scope == Scope::Home {
-        use tui_input::backend::crossterm::EventHandler;
-        if app
-            .input
-            .handle_event(&crossterm::event::Event::Key(*key))
-            .is_some()
-        {
-            app.history_idx = None;
+    use tui_input::backend::crossterm::EventHandler;
+    match scope {
+        Scope::Home => {
+            if app
+                .input
+                .handle_event(&crossterm::event::Event::Key(*key))
+                .is_some()
+            {
+                app.history_idx = None;
+            }
         }
+        Scope::FollowUp => {
+            if let Some(Overlay::FollowUp(form)) = app.overlay.as_mut() {
+                form.input.handle_event(&crossterm::event::Event::Key(*key));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -96,28 +108,13 @@ fn perform(app: &mut App, action: Action) -> Option<Command> {
             app.mode_idx = (app.mode_idx + MODES.len() - 1) % MODES.len();
             None
         }
-        Action::ScrollDown => {
-            move_down(app);
-            None
-        }
-        Action::ScrollUp => {
-            move_up(app);
-            None
-        }
-        Action::PageDown => {
-            app.scroll = app.scroll.saturating_add(PAGE_JUMP).min(max_scroll(app));
-            None
-        }
-        Action::PageUp => {
-            app.scroll = app.scroll.saturating_sub(PAGE_JUMP);
-            None
-        }
-        Action::ScrollTop => {
-            app.scroll = 0;
-            None
-        }
-        Action::ScrollBottom => {
-            app.scroll = max_scroll(app);
+        Action::ScrollDown
+        | Action::ScrollUp
+        | Action::PageDown
+        | Action::PageUp
+        | Action::ScrollTop
+        | Action::ScrollBottom => {
+            scroll_action(app, action);
             None
         }
         Action::FocusNext => {
@@ -156,18 +153,56 @@ fn perform(app: &mut App, action: Action) -> Option<Command> {
             app.fast = !app.fast;
             None
         }
+        Action::OpenTree => {
+            open_tree(app);
+            None
+        }
+        Action::OpenFollowUp => {
+            open_follow_up(app);
+            None
+        }
+        Action::SubmitFollowUp => submit_follow_up(app),
+        Action::SaveSession => save_session(app),
         Action::FieldNext | Action::FieldPrev | Action::ValueNext | Action::ValuePrev => {
-            edit_config_form(app, action);
+            if matches!(app.overlay, Some(Overlay::Help)) {
+                scroll_help(app, action);
+            } else {
+                edit_config_form(app, action);
+            }
             None
         }
         Action::Confirm => confirm_config(app),
     }
 }
 
+fn scroll_action(app: &mut App, action: Action) {
+    match action {
+        Action::ScrollDown => move_down(app),
+        Action::ScrollUp => move_up(app),
+        Action::PageDown => {
+            app.scroll = app.scroll.saturating_add(PAGE_JUMP).min(max_scroll(app));
+        }
+        Action::PageUp => app.scroll = app.scroll.saturating_sub(PAGE_JUMP),
+        Action::ScrollTop => app.scroll = 0,
+        Action::ScrollBottom => app.scroll = max_scroll(app),
+        _ => {}
+    }
+}
+
 fn toggle_help(app: &mut App) {
+    app.help_scroll = 0;
     app.overlay = match app.overlay {
         Some(Overlay::Help) => None,
         _ => Some(Overlay::Help),
+    };
+}
+
+fn scroll_help(app: &mut App, action: Action) {
+    let max = crate::tui::view::help::max_scroll(app.viewport.height);
+    app.help_scroll = match action {
+        Action::FieldNext => app.help_scroll.saturating_add(1).min(max),
+        Action::FieldPrev => app.help_scroll.saturating_sub(1),
+        _ => app.help_scroll,
     };
 }
 
@@ -188,6 +223,14 @@ fn go_back(app: &mut App) -> Option<Command> {
         }
         Screen::Results => {
             app.screen = Screen::Home;
+            None
+        }
+        Screen::Tree => {
+            app.screen = if app.search.answer.is_some() {
+                Screen::Results
+            } else {
+                Screen::Home
+            };
             None
         }
     }
@@ -252,14 +295,78 @@ fn submit_query(app: &mut App) -> Option<Command> {
     if query.is_empty() {
         return None;
     }
+    app.pending_parent = None;
     Some(Command::StartSearch { query })
 }
 
+fn open_tree(app: &mut App) {
+    if app.tree.nodes.is_empty() {
+        app.notice = Some("no research yet".to_string());
+        return;
+    }
+    app.tree_sel = app
+        .tree
+        .current
+        .and_then(|current| app.tree.flatten().iter().position(|row| row.id == current))
+        .unwrap_or(0);
+    app.screen = Screen::Tree;
+}
+
+fn open_follow_up(app: &mut App) {
+    let parent = if app.screen == Screen::Tree {
+        selected_tree_node(app)
+    } else {
+        app.tree.current
+    };
+    let Some(parent) = parent else {
+        app.notice = Some("no research to branch from".to_string());
+        return;
+    };
+    app.overlay = Some(Overlay::FollowUp(FollowUpForm {
+        input: tui_input::Input::default(),
+        parent,
+    }));
+}
+
+fn selected_tree_node(app: &App) -> Option<NodeId> {
+    app.tree.flatten().get(app.tree_sel).map(|row| row.id)
+}
+
+fn submit_follow_up(app: &mut App) -> Option<Command> {
+    let Some(Overlay::FollowUp(form)) = &app.overlay else {
+        return None;
+    };
+    let query = form.input.value().trim().to_string();
+    if query.is_empty() {
+        return None;
+    }
+    app.pending_parent = Some(form.parent);
+    app.overlay = None;
+    app.input = tui_input::Input::new(query.clone());
+    Some(Command::StartSearch { query })
+}
+
+fn save_session(app: &mut App) -> Option<Command> {
+    if app.tree.nodes.is_empty() {
+        app.notice = Some("no research to save".to_string());
+        return None;
+    }
+    Some(Command::SaveSession)
+}
+
 fn move_down(app: &mut App) {
+    if app.screen == Screen::Tree {
+        app.tree_sel = step_index(app.tree_sel, true, app.tree.nodes.len());
+        return;
+    }
     move_focus(app, true);
 }
 
 fn move_up(app: &mut App) {
+    if app.screen == Screen::Tree {
+        app.tree_sel = step_index(app.tree_sel, false, app.tree.nodes.len());
+        return;
+    }
     move_focus(app, false);
 }
 
@@ -318,6 +425,10 @@ fn cycle_focus(app: &mut App, forward: bool) {
 }
 
 fn activate(app: &mut App) -> Option<Command> {
+    if app.screen == Screen::Tree {
+        project_selected_node(app);
+        return None;
+    }
     let answer = app.search.answer.as_ref()?;
     match app.focus {
         Focus::Body => None,
@@ -328,9 +439,30 @@ fn activate(app: &mut App) -> Option<Command> {
         Focus::Followups(index) => {
             let query = answer.followups.get(index)?.clone();
             app.input = tui_input::Input::new(query.clone());
+            app.pending_parent = app.tree.current;
             Some(Command::StartSearch { query })
         }
     }
+}
+
+fn project_selected_node(app: &mut App) {
+    let Some(id) = selected_tree_node(app) else {
+        return;
+    };
+    let Some(node) = app.tree.node(id) else {
+        return;
+    };
+    let answer = node.answer.clone();
+    app.tree.current = Some(id);
+    app.search.answer = Some(answer);
+    app.search.links.clear();
+    app.search.images.clear();
+    app.search.reveal_started = None;
+    app.search.pulse = None;
+    app.image_runtime.clear();
+    app.scroll = 0;
+    app.focus = Focus::Body;
+    app.screen = Screen::Results;
 }
 
 fn jump_to_source(app: &mut App, number: u8) {
@@ -522,17 +654,49 @@ fn confirm_config(app: &mut App) -> Option<Command> {
 fn apply_search_event(app: &mut App, event: SearchEvent) -> Option<Command> {
     match app.search.apply_event(event, app.tick) {
         SearchOutcome::AnswerReady => {
+            capture_node(app);
             app.screen = Screen::Results;
             app.scroll = 0;
             app.focus = Focus::Body;
         }
         SearchOutcome::Failed(message) => {
             app.notice = Some(message);
+            app.pending_parent = None;
             app.screen = Screen::Home;
         }
         SearchOutcome::Completed | SearchOutcome::None => {}
     }
     None
+}
+
+fn capture_node(app: &mut App) {
+    let Some(answer) = app.search.answer.clone() else {
+        return;
+    };
+    let (query, mode, sub_queries) = app.search.plan.as_ref().map_or_else(
+        || {
+            (
+                app.input.value().trim().to_string(),
+                app.current_mode(),
+                Vec::new(),
+            )
+        },
+        |plan| (plan.original.clone(), plan.mode, plan.sub_queries.clone()),
+    );
+    let parent = app.pending_parent.take();
+    app.tree.add_node(
+        parent,
+        NodeSeed {
+            query,
+            mode,
+            fast: app.fast,
+            started_at: app.search_started_unix,
+            completed_at: app.clock_unix,
+            answer,
+            sub_queries,
+            web_urls: app.search.web_urls.clone(),
+        },
+    );
 }
 
 #[cfg(test)]
@@ -1048,6 +1212,30 @@ mod tests {
     }
 
     #[test]
+    fn arrow_keys_scroll_the_help_modal_within_bounds() {
+        let mut app = app();
+        app.viewport = Viewport {
+            width: 80,
+            height: 24,
+        };
+        update(&mut app, ctrl('g'));
+        assert_eq!(app.help_scroll, 0);
+        update(&mut app, key(KeyCode::Down));
+        assert_eq!(app.help_scroll, 1);
+        update(&mut app, key(KeyCode::Up));
+        update(&mut app, key(KeyCode::Up));
+        assert_eq!(app.help_scroll, 0);
+        let max = crate::tui::view::help::max_scroll(24);
+        for _ in 0..200 {
+            update(&mut app, key(KeyCode::Down));
+        }
+        assert_eq!(app.help_scroll, max);
+        update(&mut app, ctrl('g'));
+        update(&mut app, ctrl('g'));
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
     fn refine_search_can_return_to_the_previous_results() {
         let mut app = app();
         app.search.answer = Some(sample_answer());
@@ -1314,6 +1502,186 @@ mod tests {
         assert_eq!(update(&mut app, ctrl('l')), None);
         assert!(!app.clear_history_armed);
         assert_eq!(app.notice.as_deref(), Some("no search history"));
+    }
+
+    fn searched_app() -> App {
+        let mut app = app();
+        app.input = tui_input::Input::new("q".to_string());
+        app.clock_unix = 100;
+        app.begin_search();
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::PlanReady(sample_plan())),
+        );
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::WebHits {
+                count: 1,
+                urls: vec!["https://hit.example".to_string()],
+            }),
+        );
+        app.clock_unix = 130;
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::AnswerReady(Box::new(interactive_answer()))),
+        );
+        app.viewport = Viewport {
+            width: 40,
+            height: 24,
+        };
+        app
+    }
+
+    #[test]
+    fn answer_ready_captures_a_research_node() {
+        let app = searched_app();
+        assert_eq!(app.tree.nodes.len(), 1);
+        let node = app.tree.current_node().unwrap();
+        assert_eq!(node.query, "q");
+        assert_eq!(node.parent, None);
+        assert_eq!(node.sub_queries.len(), 2);
+        assert_eq!(node.web_urls, vec!["https://hit.example"]);
+        assert_eq!(node.started_at, 100);
+        assert_eq!(node.completed_at, 130);
+        assert_eq!(app.screen, Screen::Results);
+    }
+
+    #[test]
+    fn follow_up_overlay_types_submits_and_branches_from_the_current_node() {
+        let mut app = searched_app();
+        let root = app.tree.current.unwrap();
+        update(&mut app, key(KeyCode::Char('f')));
+        assert!(matches!(app.overlay, Some(Overlay::FollowUp(_))));
+        type_query(&mut app, "why though");
+        let command = update(&mut app, key(KeyCode::Enter));
+        assert_eq!(
+            command,
+            Some(Command::StartSearch {
+                query: "why though".to_string(),
+            })
+        );
+        assert_eq!(app.overlay, None);
+        assert_eq!(app.pending_parent, Some(root));
+        app.begin_search();
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::AnswerReady(Box::new(sample_answer()))),
+        );
+        assert_eq!(app.tree.nodes.len(), 2);
+        assert_eq!(app.tree.nodes[1].parent, Some(root));
+        assert_eq!(app.tree.current, Some(app.tree.nodes[1].id));
+    }
+
+    #[test]
+    fn empty_follow_up_submit_keeps_the_overlay_open() {
+        let mut app = searched_app();
+        update(&mut app, key(KeyCode::Char('f')));
+        assert_eq!(update(&mut app, key(KeyCode::Enter)), None);
+        assert!(matches!(app.overlay, Some(Overlay::FollowUp(_))));
+        assert_eq!(app.pending_parent, None);
+    }
+
+    #[test]
+    fn follow_up_without_research_reports_instead_of_opening() {
+        let mut app = results_app(interactive_answer(), 24);
+        update(&mut app, key(KeyCode::Char('f')));
+        assert_eq!(app.overlay, None);
+        assert_eq!(app.notice.as_deref(), Some("no research to branch from"));
+    }
+
+    #[test]
+    fn followup_suggestion_enter_branches_from_the_current_node() {
+        let mut app = searched_app();
+        let root = app.tree.current.unwrap();
+        app.focus = Focus::Followups(0);
+        let command = update(&mut app, key(KeyCode::Enter));
+        assert_eq!(
+            command,
+            Some(Command::StartSearch {
+                query: "next".to_string(),
+            })
+        );
+        assert_eq!(app.pending_parent, Some(root));
+    }
+
+    #[test]
+    fn tree_screen_navigates_projects_and_branches() {
+        let mut app = searched_app();
+        let root = app.tree.current.unwrap();
+        app.pending_parent = Some(root);
+        app.begin_search();
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::AnswerReady(Box::new(sample_answer()))),
+        );
+        update(&mut app, key(KeyCode::Char('t')));
+        assert_eq!(app.screen, Screen::Tree);
+        assert_eq!(app.tree_sel, 1);
+        update(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.tree_sel, 0);
+        update(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.tree_sel, 0);
+        update(&mut app, key(KeyCode::Enter));
+        assert_eq!(app.screen, Screen::Results);
+        assert_eq!(app.tree.current, Some(root));
+        assert_eq!(
+            app.search
+                .answer
+                .as_ref()
+                .map(|answer| answer.title.as_str()),
+            Some("t")
+        );
+        update(&mut app, key(KeyCode::Char('t')));
+        update(&mut app, key(KeyCode::Char('j')));
+        update(&mut app, key(KeyCode::Char('f')));
+        assert!(
+            matches!(&app.overlay, Some(Overlay::FollowUp(form)) if form.parent == app.tree.nodes[1].id)
+        );
+    }
+
+    #[test]
+    fn open_tree_without_research_reports_a_notice() {
+        let mut app = results_app(sample_answer(), 24);
+        update(&mut app, key(KeyCode::Char('t')));
+        assert_eq!(app.screen, Screen::Results);
+        assert_eq!(app.notice.as_deref(), Some("no research yet"));
+    }
+
+    #[test]
+    fn new_search_wipes_the_answer_but_keeps_the_tree() {
+        let mut app = searched_app();
+        update(&mut app, key(KeyCode::Char('n')));
+        assert_eq!(app.screen, Screen::Home);
+        assert!(app.search.answer.is_none());
+        assert_eq!(app.tree.nodes.len(), 1);
+    }
+
+    #[test]
+    fn save_session_needs_research_to_save() {
+        let mut app = results_app(sample_answer(), 24);
+        assert_eq!(update(&mut app, key(KeyCode::Char('s'))), None);
+        assert_eq!(app.notice.as_deref(), Some("no research to save"));
+        let mut searched = searched_app();
+        assert_eq!(
+            update(&mut searched, key(KeyCode::Char('s'))),
+            Some(Command::SaveSession)
+        );
+    }
+
+    #[test]
+    fn home_submit_starts_a_new_research_root() {
+        let mut app = searched_app();
+        update(&mut app, key(KeyCode::Char('/')));
+        assert_eq!(app.screen, Screen::Home);
+        let command = update(&mut app, key(KeyCode::Enter));
+        assert!(matches!(command, Some(Command::StartSearch { .. })));
+        assert_eq!(app.pending_parent, None);
+        app.begin_search();
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::AnswerReady(Box::new(sample_answer()))),
+        );
+        assert_eq!(app.tree.nodes[1].parent, None);
     }
 
     #[test]

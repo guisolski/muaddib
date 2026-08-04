@@ -1,6 +1,6 @@
 # Search pipeline
 
-`pipeline/search.rs` orchestrates seven stages. All planning, merging, and
+`pipeline/search.rs` orchestrates eight stages. All planning, merging, and
 citation logic is pure (`src/core/`); the pipeline only sequences engine calls
 and emits events.
 
@@ -8,6 +8,16 @@ and emits events.
 [Fast mode](#fast-mode-one-call) below.
 
 ## Stages
+
+### Follow-up context
+
+A follow-up search (branched from a research-tree node — ADR-0010) carries a
+`ResearchContext` on the request: the ancestor path root→parent, capped at 4
+steps, each with the query, a ≤500-char answer digest, and up to 5 cited
+source URLs (`core/context.rs`). `context_prompt_block` injects it into the
+expansion, synthesis, and fast prompts — an empty context leaves every prompt
+byte-identical to a fresh search — and the step URLs join the synthesis
+allowlist so the new answer may re-cite the ancestors' sources.
 
 ### 1. Expand
 
@@ -42,10 +52,14 @@ With `[websearch] enabled = true` (default; forced off in fast mode and by
 engines and — in Scientific mode — scholarly APIs, all declared as rows in the
 `WEB_ENGINES` table (`core/websearch.rs`). Engines are walked as a waterfall
 per sub-query (DuckDuckGo falls back to its lite endpoint; academic engines
-come first in Scientific mode), stopping at `max_hits_per_query` deduplicated
-hits, with 2 sub-queries in flight, a 3s per-request timeout, and a 5s
-per-sub-query deadline that keeps whatever partial hits arrived. One
-`WebHits { count }` event reports the total.
+come first in Scientific mode), over-fetching a pool of `max_hits_per_query ×
+3` deduplicated hits, with 2 sub-queries in flight, a 3s per-request timeout,
+and a 5s per-sub-query deadline that keeps whatever partial hits arrived. The
+pool is then ranked against the sub-query with BM25 (`core/rank.rs` — pure
+lexical scoring over title-doubled-plus-snippet token bags, stable ties keep
+engine order) and truncated to `max_hits_per_query`, so the surviving hits are
+the most relevant of the pool rather than the first encountered (ADR-0008).
+One `WebHits { count }` event reports the total.
 
 The hits ground the next stage: each sub-search prompt gains a "candidate
 sources" block (title, URL, snippet) the AI is told to verify before citing,
@@ -56,7 +70,25 @@ a blocked engine, drifted markup, or timeout contributes zero hits and the
 pipeline continues exactly as an AI-only search — this stage can only add,
 never break.
 
-### 3. Fan-out
+### 3. Page-content grounding
+
+With the current mode listed in `[websearch] ground_modes` (default:
+`scientific` and `deep`), the top `ground_top_n` reranked hits of each
+sub-query have their pages fetched (`pipeline/pages.rs`) — GET with a 4s
+per-request timeout, `text/html`/`application/xhtml` only, 2 MiB cap, 4
+concurrent fetches, all under a 10s stage deadline that keeps whatever
+finished. Each page is fetched once even when several sub-queries share it.
+A readability-lite pass (`core/readability.rs`) picks the first matching
+content root (`article`, `main`, `[role=main]`, `body`), drops noise subtrees
+(`script`, `style`, `nav`, `header`, `footer`, `aside`, `form`, `noscript`),
+normalizes whitespace, and truncates to `ground_page_chars`. The excerpts
+join the matching sub-search prompts as a "fetched page content" block after
+the candidate sources. One `PageFetched { url, ok }` event streams per
+attempt. **Every failure is silent**: a dead page, a non-HTML response, an
+oversized body, or the deadline just means no page block for that URL
+(ADR-0009).
+
+### 4. Fan-out
 
 Sub-searches run through `futures::stream::buffer_unordered(max_parallel)` —
 results are consumed as they land, so one slow search never blocks the others.
@@ -71,14 +103,14 @@ Each sub-search prompt demands findings with exact URLs:
 figure) on the consulted page. A failed sub-query is dropped (with a `SubQueryFinished { ok: false }` event);
 the pipeline continues as long as at least one succeeds and produces findings.
 
-### 4. Merge (pure)
+### 5. Merge (pure)
 
 `merge_sub_results` deduplicates findings by *(normalized URL, normalized
 claim)*. URL normalization lowercases scheme and host, strips fragments and
 trailing slashes, and preserves path case. Findings without an `http(s)` URL are
 discarded here — they could never be cited.
 
-### 5. Synthesize
+### 6. Synthesize
 
 One final engine call receives the merged findings as JSON plus the answer
 schema (`core/answer.rs::ANSWER_SCHEMA` — via `--json-schema` on claude,
@@ -99,7 +131,7 @@ values — the same anti-hallucination rule sources get. `renumber_sources` then
 - drops dangling `source_ids` and deduplicates repeats,
 - renumbers sources 1..n in first-use order and prunes unused ones.
 
-### 6. Validate links
+### 7. Validate links
 
 With the `link-validation` feature (default) and `validate_links = true`, every
 source URL gets an HTTP HEAD request — 8 concurrent, 8s timeout, up to 5
@@ -107,7 +139,7 @@ redirects; 403/405/501 retry as `GET` with `Range: bytes=0-0` (some servers
 reject HEAD). Results stream to the UI as `LinkChecked` events: ✓, ✗ 404, or
 ✗ unreachable.
 
-### 7. Fetch images
+### 8. Fetch images
 
 With `images = true` (default) every surviving `image` block's URL is
 downloaded — 4 concurrent GETs, 5 MB cap — and streamed to the UI as
@@ -120,7 +152,7 @@ this stage — the JSON answer carries the image URLs themselves.
 ## Fast mode: one call
 
 `Ctrl+F` in the TUI, `--fast` on the CLI. `run_stages` branches into
-`run_fast_stages`, which collapses stages 1–5 into a single engine call
+`run_fast_stages`, which collapses stages 1–6 into a single engine call
 (web-search grounding is skipped — latency first):
 
 1. **Plan locally.** `literal_plan` (pure) wraps the query as the one and only
@@ -135,7 +167,7 @@ this stage — the JSON answer carries the image URLs themselves.
 3. **Guard the output.** `strip_image_blocks` removes any image the model emitted
    anyway; `renumber_sources` then runs against `self_declared_urls(&answer)` —
    the answer's own `sources`, filtered to real `http(s)` URLs.
-4. **Validate links** as usual (stage 6). Stage 7 never runs: `from_config`
+4. **Validate links** as usual (stage 7). Stage 8 never runs: `from_config`
    forces `fetch_images = false` whenever `fast` is set.
 
 The model comes from `[engines.<name>] fast_model`, else the engine table's

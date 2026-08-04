@@ -4,12 +4,14 @@ use crate::core::citations::{
     parse_sub_response, renumber_sources, self_declared_urls, strip_image_blocks,
 };
 use crate::core::config::{Config, WebSearchConfig};
+use crate::core::context::{ResearchContext, context_allowed_urls};
 use crate::core::extract::extract_json;
 use crate::core::mode::{Mode, ModeSpec};
 use crate::core::plan::{
     SearchPlan, SubQuery, effective_breadth, literal_plan, plan_from_expansion,
 };
 use crate::core::prompts::{expansion_prompt, fast_prompt, sub_search_prompt, synthesis_prompt};
+use crate::core::readability::PageText;
 use crate::core::websearch::{WebHit, allowed_urls_with_hits, snippet_sub_results};
 use crate::engines::{Engine, EngineJob};
 use crate::pipeline::websearch::{WebFetcher, default_fetcher, websearch_stage};
@@ -36,6 +38,7 @@ pub struct SearchRequest {
     pub validate_links: bool,
     pub fetch_images: bool,
     pub websearch: WebSearchConfig,
+    pub context: ResearchContext,
 }
 
 impl SearchRequest {
@@ -56,6 +59,7 @@ impl SearchRequest {
             } else {
                 config.websearch.clone()
             },
+            context: ResearchContext::default(),
         }
     }
 }
@@ -102,7 +106,8 @@ async fn run_stages(
     let plan = expansion_stage(engine, request).await;
     send(tx, SearchEvent::PlanReady(plan.clone())).await;
     let hits = websearch_stage(fetcher, &plan, &request.websearch, tx).await;
-    let sub_results = fanout_stage(engine, &plan, &hits, request, tx).await;
+    let pages = page_grounding_stage(fetcher, &plan, &hits, &request.websearch, tx).await;
+    let sub_results = fanout_stage(engine, &plan, &hits, &pages, request, tx).await;
     if sub_results.is_empty() {
         return Err("every sub-query failed; nothing to synthesize".to_string());
     }
@@ -168,6 +173,7 @@ async fn fast_answer_stage(engine: &dyn Engine, request: &SearchRequest) -> Resu
             request.mode.spec(),
             &request.answer_lang,
             inline_schema,
+            &request.context,
         ),
         schema: Some(FAST_ANSWER_SCHEMA),
         timeout: request.fast_timeout,
@@ -190,6 +196,7 @@ async fn expansion_stage(engine: &dyn Engine, request: &SearchRequest) -> Search
         request.mode.spec(),
         &request.answer_lang,
         request.breadth,
+        &request.context,
     );
     let job = EngineJob {
         prompt,
@@ -209,10 +216,17 @@ async fn expansion_stage(engine: &dyn Engine, request: &SearchRequest) -> Search
     )
 }
 
+struct GroundedSubQuery<'a> {
+    sub: &'a SubQuery,
+    hits: &'a [WebHit],
+    pages: &'a [PageText],
+}
+
 async fn fanout_stage(
     engine: &dyn Engine,
     plan: &SearchPlan,
     hits: &[Vec<WebHit>],
+    pages: &[Vec<PageText>],
     request: &SearchRequest,
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Vec<SubResult> {
@@ -222,8 +236,12 @@ async fn fanout_stage(
         .iter()
         .enumerate()
         .map(|(idx, sub)| {
-            let sub_hits = hits.get(idx).map_or(&[][..], Vec::as_slice);
-            track_sub_query(engine, idx, sub, sub_hits, mode_spec, request, tx)
+            let grounded = GroundedSubQuery {
+                sub,
+                hits: hits.get(idx).map_or(&[][..], Vec::as_slice),
+                pages: pages.get(idx).map_or(&[][..], Vec::as_slice),
+            };
+            track_sub_query(engine, idx, grounded, mode_spec, request, tx)
         })
         .collect();
     stream::iter(sub_query_futures)
@@ -238,14 +256,13 @@ async fn fanout_stage(
 async fn track_sub_query(
     engine: &dyn Engine,
     idx: usize,
-    sub: &SubQuery,
-    hits: &[WebHit],
+    grounded: GroundedSubQuery<'_>,
     mode_spec: &ModeSpec,
     request: &SearchRequest,
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Option<SubResult> {
     send(tx, SearchEvent::SubQueryStarted { idx }).await;
-    let result = run_sub_query(engine, sub, hits, mode_spec, request.engine_timeout).await;
+    let result = run_sub_query(engine, &grounded, mode_spec, request.engine_timeout).await;
     let ok = result.is_some();
     send(tx, SearchEvent::SubQueryFinished { idx, ok }).await;
     result
@@ -253,13 +270,12 @@ async fn track_sub_query(
 
 async fn run_sub_query(
     engine: &dyn Engine,
-    sub: &SubQuery,
-    hits: &[WebHit],
+    grounded: &GroundedSubQuery<'_>,
     mode_spec: &ModeSpec,
     timeout: Duration,
 ) -> Option<SubResult> {
     let job = EngineJob {
-        prompt: sub_search_prompt(sub, mode_spec, hits),
+        prompt: sub_search_prompt(grounded.sub, mode_spec, grounded.hits, grounded.pages),
         schema: None,
         timeout,
     };
@@ -267,8 +283,8 @@ async fn run_sub_query(
     let value = extract_json(&output.text)?;
     let response = parse_sub_response(&value)?;
     Some(SubResult {
-        query: sub.query.clone(),
-        lang: sub.lang.clone(),
+        query: grounded.sub.query.clone(),
+        lang: grounded.sub.lang.clone(),
         response,
     })
 }
@@ -282,7 +298,7 @@ async fn synthesis_stage(
 ) -> Result<Answer, String> {
     let inline_schema = !engine.supports_json_schema();
     let job = EngineJob {
-        prompt: synthesis_prompt(plan, merged, inline_schema),
+        prompt: synthesis_prompt(plan, merged, inline_schema, &request.context),
         schema: Some(ANSWER_SCHEMA),
         timeout: request.engine_timeout,
     };
@@ -295,10 +311,33 @@ async fn synthesis_stage(
     let answer = parse_answer(value)
         .map_err(|error| format!("synthesis JSON did not match the answer schema: {error}"))?;
     let answer = eject_unknown_images(answer, &allowed_image_urls(merged));
-    Ok(renumber_sources(
-        answer,
-        &allowed_urls_with_hits(merged, hits),
-    ))
+    let allowed: std::collections::BTreeSet<String> = allowed_urls_with_hits(merged, hits)
+        .into_iter()
+        .chain(context_allowed_urls(&request.context))
+        .collect();
+    Ok(renumber_sources(answer, &allowed))
+}
+
+#[cfg(feature = "websearch")]
+async fn page_grounding_stage(
+    fetcher: &dyn WebFetcher,
+    plan: &SearchPlan,
+    hits: &[Vec<WebHit>],
+    config: &WebSearchConfig,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> Vec<Vec<PageText>> {
+    crate::pipeline::pages::page_fetch_stage(fetcher, plan, hits, config, tx).await
+}
+
+#[cfg(not(feature = "websearch"))]
+async fn page_grounding_stage(
+    _fetcher: &dyn WebFetcher,
+    _plan: &SearchPlan,
+    hits: &[Vec<WebHit>],
+    _config: &WebSearchConfig,
+    _tx: &mpsc::Sender<SearchEvent>,
+) -> Vec<Vec<PageText>> {
+    vec![Vec::new(); hits.len()]
 }
 
 #[cfg(feature = "link-validation")]
@@ -480,14 +519,25 @@ mod tests {
 
     struct FakeWebFetcher {
         canned: Vec<WebHit>,
+        page_body: Option<&'static str>,
         calls: AtomicUsize,
+        page_calls: AtomicUsize,
     }
 
     impl FakeWebFetcher {
         fn returning(canned: Vec<WebHit>) -> Self {
             Self {
                 canned,
+                page_body: None,
                 calls: AtomicUsize::new(0),
+                page_calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn with_pages(canned: Vec<WebHit>, page_body: &'static str) -> Self {
+            Self {
+                page_body: Some(page_body),
+                ..Self::returning(canned)
             }
         }
     }
@@ -503,6 +553,16 @@ mod tests {
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 self.canned.iter().take(max_hits).cloned().collect()
+            })
+        }
+
+        fn fetch_page<'a>(
+            &'a self,
+            _url: &'a str,
+        ) -> crate::pipeline::websearch::BoxedPageFuture<'a> {
+            Box::pin(async move {
+                self.page_calls.fetch_add(1, Ordering::SeqCst);
+                self.page_body.map(str::to_string)
             })
         }
     }
@@ -529,6 +589,7 @@ mod tests {
             validate_links: false,
             fetch_images: false,
             websearch: WebSearchConfig::disabled(),
+            context: ResearchContext::default(),
         }
     }
 
@@ -781,7 +842,7 @@ mod tests {
         assert!(
             events
                 .iter()
-                .any(|event| matches!(event, SearchEvent::WebHits { count: 3 }))
+                .any(|event| matches!(event, SearchEvent::WebHits { count: 3, .. }))
         );
         let sub_prompts = engine.prompts_with(SUB_SEARCH_MARKER);
         assert_eq!(sub_prompts.len(), 3);
@@ -819,6 +880,93 @@ mod tests {
         assert_eq!(synthesis_prompts.len(), 1);
         assert!(synthesis_prompts[0].contains("https://hit.example/page"));
         assert!(synthesis_prompts[0].contains("A snippet worth citing."));
+    }
+
+    #[tokio::test]
+    async fn follow_up_context_reaches_prompts_and_allows_ancestor_sources() {
+        use crate::core::context::ContextStep;
+        let engine = Arc::new(FakeEngine::reliable());
+        let context = ResearchContext {
+            steps: vec![ContextStep {
+                query: "earlier question".to_string(),
+                summary: "earlier answer digest".to_string(),
+                source_urls: vec!["https://invented.example/x".to_string()],
+            }],
+            omitted: 0,
+        };
+        let events = drain_with(
+            engine.clone(),
+            Arc::new(NoopWebFetcher),
+            SearchRequest {
+                context,
+                ..request()
+            },
+        )
+        .await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        for marker in [EXPANSION_MARKER, SYNTHESIS_MARKER] {
+            let prompts = engine.prompts_with(marker);
+            assert!(!prompts.is_empty(), "{marker}");
+            assert!(prompts[0].contains("research thread"), "{marker}");
+            assert!(prompts[0].contains("earlier question"), "{marker}");
+        }
+        let urls: Vec<&str> = answer_in(&events)
+            .sources
+            .iter()
+            .map(|source| source.url.as_str())
+            .collect();
+        assert!(urls.contains(&"https://invented.example/x"));
+    }
+
+    #[tokio::test]
+    async fn scientific_mode_grounds_sub_search_prompts_with_page_content() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let fetcher = Arc::new(FakeWebFetcher::with_pages(
+            vec![web_hit("https://hit.example/page", "snippet")],
+            "<html><body><article><p>Peer-reviewed rodent study.</p></article></body></html>",
+        ));
+        let events = drain_with(
+            engine.clone(),
+            fetcher,
+            SearchRequest {
+                mode: Mode::Scientific,
+                websearch: WebSearchConfig::default(),
+                ..request()
+            },
+        )
+        .await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::PageFetched { ok, .. } if *ok))
+        );
+        let sub_prompts = engine.prompts_with(SUB_SEARCH_MARKER);
+        assert!(!sub_prompts.is_empty());
+        for prompt in sub_prompts {
+            assert!(prompt.contains("Fetched page content"));
+            assert!(prompt.contains("Peer-reviewed rodent study."));
+        }
+    }
+
+    #[tokio::test]
+    async fn general_mode_skips_page_grounding_by_default() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let fetcher = Arc::new(FakeWebFetcher::with_pages(
+            vec![web_hit("https://hit.example/page", "snippet")],
+            "<html><body><p>ignored</p></body></html>",
+        ));
+        let events = drain_with(engine.clone(), fetcher.clone(), websearch_request(false)).await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert_eq!(fetcher.page_calls.load(Ordering::SeqCst), 0);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::PageFetched { .. }))
+        );
+        for prompt in engine.prompts_with(SUB_SEARCH_MARKER) {
+            assert!(!prompt.contains("Fetched page content"));
+        }
     }
 
     #[tokio::test]

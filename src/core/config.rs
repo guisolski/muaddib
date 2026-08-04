@@ -10,6 +10,10 @@ pub const MIN_FAST_TIMEOUT_SECS: u64 = 5;
 pub const MAX_FAST_TIMEOUT_SECS: u64 = 120;
 pub const MIN_WEB_HITS: u8 = 1;
 pub const MAX_WEB_HITS: u8 = 10;
+pub const MIN_GROUND_PAGES: u8 = 1;
+pub const MAX_GROUND_PAGES: u8 = 5;
+pub const MIN_GROUND_PAGE_CHARS: u32 = 500;
+pub const MAX_GROUND_PAGE_CHARS: u32 = 20_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -35,6 +39,9 @@ pub struct WebSearchConfig {
     pub max_hits_per_query: u8,
     pub engines: Vec<String>,
     pub mailto: String,
+    pub ground_modes: Vec<String>,
+    pub ground_top_n: u8,
+    pub ground_page_chars: u32,
 }
 
 impl Default for WebSearchConfig {
@@ -45,6 +52,9 @@ impl Default for WebSearchConfig {
             max_hits_per_query: 5,
             engines: Vec::new(),
             mailto: String::new(),
+            ground_modes: vec!["scientific".to_string(), "deep".to_string()],
+            ground_top_n: 3,
+            ground_page_chars: 4_000,
         }
     }
 }
@@ -132,6 +142,14 @@ pub fn clamp_config(mut config: Config) -> Config {
         .websearch
         .max_hits_per_query
         .clamp(MIN_WEB_HITS, MAX_WEB_HITS);
+    config.websearch.ground_top_n = config
+        .websearch
+        .ground_top_n
+        .clamp(MIN_GROUND_PAGES, MAX_GROUND_PAGES);
+    config.websearch.ground_page_chars = config
+        .websearch
+        .ground_page_chars
+        .clamp(MIN_GROUND_PAGE_CHARS, MAX_GROUND_PAGE_CHARS);
     config
 }
 
@@ -359,6 +377,72 @@ mod tests {
     }
 
     #[test]
+    fn websearch_grounding_keys_parse_defaults_and_clamp() {
+        struct Case {
+            name: &'static str,
+            input: &'static str,
+            want_modes: Vec<&'static str>,
+            want_top_n: u8,
+            want_chars: u32,
+        }
+        let cases = [
+            Case {
+                name: "absent keys use scientific and deep defaults",
+                input: "",
+                want_modes: vec!["scientific", "deep"],
+                want_top_n: 3,
+                want_chars: 4_000,
+            },
+            Case {
+                name: "empty mode list disables grounding everywhere",
+                input: "[websearch]\nground_modes = []",
+                want_modes: vec![],
+                want_top_n: 3,
+                want_chars: 4_000,
+            },
+            Case {
+                name: "top n too high is clamped down",
+                input: "[websearch]\nground_top_n = 99",
+                want_modes: vec!["scientific", "deep"],
+                want_top_n: MAX_GROUND_PAGES,
+                want_chars: 4_000,
+            },
+            Case {
+                name: "top n zero is clamped up",
+                input: "[websearch]\nground_top_n = 0",
+                want_modes: vec!["scientific", "deep"],
+                want_top_n: MIN_GROUND_PAGES,
+                want_chars: 4_000,
+            },
+            Case {
+                name: "page chars are clamped to bounds",
+                input: "[websearch]\nground_page_chars = 1",
+                want_modes: vec!["scientific", "deep"],
+                want_top_n: 3,
+                want_chars: MIN_GROUND_PAGE_CHARS,
+            },
+        ];
+        for case in cases {
+            let config = parse_config(case.input).unwrap();
+            assert_eq!(
+                config.websearch.ground_modes, case.want_modes,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                config.websearch.ground_top_n, case.want_top_n,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                config.websearch.ground_page_chars, case.want_chars,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
     fn websearch_engines_and_mailto_parse_from_toml() {
         let text = "[websearch]\nengines = [\"ddg\", \"openalex\"]\nmailto = \"user@example.com\"";
         let config = parse_config(text).unwrap();
@@ -487,6 +571,9 @@ mod tests {
                 max_hits_per_query: 7,
                 engines: vec!["ddg".to_string(), "openalex".to_string()],
                 mailto: "user@example.com".to_string(),
+                ground_modes: vec!["general".to_string()],
+                ground_top_n: 2,
+                ground_page_chars: 1_000,
             },
             engines: BTreeMap::from([(
                 "claude".to_string(),

@@ -101,7 +101,7 @@ pub fn mascot_state(app: &App) -> MascotState {
         Screen::Results if recently(app.search.reveal_started, app.tick, CELEBRATE_TICKS) => {
             MascotState::Celebrating
         }
-        Screen::Results => MascotState::Hidden,
+        Screen::Results | Screen::Tree => MascotState::Hidden,
     }
 }
 

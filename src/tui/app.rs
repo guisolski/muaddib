@@ -1,8 +1,10 @@
 use crate::core::config::{Config, MAX_PARALLEL, MIN_PARALLEL};
 use crate::core::mode::{MODES, Mode};
+use crate::core::tree::{NodeId, ResearchTree};
 use crate::engines::{EngineSpec, EngineStatus};
 use crate::tui::images::ImageRuntime;
 use crate::tui::search_state::SearchState;
+use std::path::PathBuf;
 use std::time::Instant;
 use tui_input::Input;
 
@@ -28,6 +30,7 @@ pub enum Screen {
     Home,
     Searching,
     Results,
+    Tree,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,7 +44,24 @@ pub enum Focus {
 pub enum Overlay {
     Help,
     Config(ConfigForm),
+    FollowUp(FollowUpForm),
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct FollowUpForm {
+    pub input: Input,
+    pub parent: NodeId,
+}
+
+impl PartialEq for FollowUpForm {
+    fn eq(&self, other: &Self) -> bool {
+        self.parent == other.parent
+            && self.input.value() == other.input.value()
+            && self.input.cursor() == other.input.cursor()
+    }
+}
+
+impl Eq for FollowUpForm {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfigField {
@@ -187,6 +207,13 @@ pub struct App {
     pub focus: Focus,
     pub tick: u64,
     pub notice: Option<String>,
+    pub tree: ResearchTree,
+    pub tree_sel: usize,
+    pub help_scroll: u16,
+    pub pending_parent: Option<NodeId>,
+    pub session_path: Option<PathBuf>,
+    pub clock_unix: u64,
+    pub search_started_unix: u64,
 }
 
 impl App {
@@ -218,6 +245,13 @@ impl App {
             focus: Focus::Body,
             tick: 0,
             notice: None,
+            tree: ResearchTree::default(),
+            tree_sel: 0,
+            help_scroll: 0,
+            pending_parent: None,
+            session_path: None,
+            clock_unix: 0,
+            search_started_unix: 0,
         }
     }
 
@@ -232,6 +266,7 @@ impl App {
         self.scroll = 0;
         self.focus = Focus::Body;
         self.notice = None;
+        self.search_started_unix = self.clock_unix;
     }
 
     pub fn end_search(&mut self) {

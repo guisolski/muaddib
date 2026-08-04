@@ -1,4 +1,5 @@
 use muaddib::core::config::WebSearchConfig;
+use muaddib::core::context::ResearchContext;
 use muaddib::core::mode::Mode;
 use muaddib::engines::cli::CliEngine;
 use muaddib::engines::engine_by_name;
@@ -32,6 +33,7 @@ fn request() -> SearchRequest {
         validate_links: false,
         fetch_images: false,
         websearch: WebSearchConfig::disabled(),
+        context: ResearchContext::default(),
     }
 }
 

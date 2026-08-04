@@ -2,8 +2,9 @@
 
 ## File locations
 
-muaddib keeps two files apart: hand-edited settings under the XDG *config* dir, and
-machine-appended search history under the XDG *state* dir.
+muaddib keeps its files apart: hand-edited settings under the XDG *config* dir,
+and machine-written state — search history and saved research sessions — under
+the XDG *state* dir.
 
 ### Config
 
@@ -42,6 +43,17 @@ still moves to the front of the in-session recall list.
 
 See [Search history](#search-history-1) for the keys that drive it.
 
+### Research sessions
+
+Saved research trees (see [Research sessions](#research-sessions-1)) live in:
+
+1. `$MUADDIB_SESSIONS` — explicit directory (also the test seam)
+2. `$XDG_STATE_HOME/muaddib/sessions/`
+3. `~/.local/state/muaddib/sessions/`
+
+One versioned JSON file per session, named `session-<unix-seconds>.json`.
+Nothing is written unless you press `s` — the tree is in-memory by default.
+
 ## Keys
 
 ```toml
@@ -62,6 +74,11 @@ max_hits_per_query = 5      # deduplicated hits per sub-query, clamped to 1..=10
 engines = []                # empty = mode defaults; else an allowlist of engine names
                             # (ddg, ddg-lite, bing, mojeek, google, openalex, crossref, s2)
 mailto = ""                 # optional email for the OpenAlex/Crossref polite pools
+ground_modes = ["scientific", "deep"]
+                            # modes whose top hits get their page content fetched
+                            # and fed to the sub-searches; empty = off everywhere
+ground_top_n = 3            # pages fetched per sub-query, clamped to 1..=5
+ground_page_chars = 4000    # extracted chars kept per page, clamped to 500..=20000
 
 [engines.claude]            # optional, one block per engine
 bin = "/custom/path/claude" # binary override (also used by the test suite)
@@ -141,6 +158,24 @@ it — the first press asks, the second one deletes.
 
 `Ctrl+F` and `Ctrl+L` shadow `tui-input`'s emacs bindings for forward-char and
 (unused) clear-line on the Home screen. `Right` still moves the cursor.
+
+## Research sessions
+
+Every completed search becomes a node in an in-memory research tree; follow-ups
+branch from the node they were asked from (ADR-0010).
+
+| Key / flag | Effect |
+|---|---|
+| `f` (Results / tree) | ask a follow-up that branches from the current / selected node |
+| `t` (Results) | open the research tree; `j`/`k` move, `Enter` views a node's answer |
+| `s` (Results / tree) | save the session to disk; later saves overwrite the same file |
+| `--session <file>` | reopen a saved session in the TUI |
+| `$MUADDIB_SESSIONS` | overrides the sessions directory entirely |
+
+Follow-ups carry the ancestor path (queries, answer digests, cited sources)
+into the expansion and synthesis prompts, and the ancestors' sources remain
+citable by the new answer. A search submitted from Home always starts a new
+root. `--print` ignores sessions: stdout stays a bare `Answer` document.
 
 ## The config modal
 

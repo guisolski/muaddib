@@ -1,15 +1,27 @@
 use crate::core::config::{MAX_BREADTH, MODE_DEFAULT_BREADTH};
 use crate::core::mode::Mode;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct SubQuery {
     pub query: String,
     pub lang: String,
     pub rationale: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl Default for SubQuery {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            lang: "en".to_string(),
+            rationale: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchPlan {
     pub original: String,
     pub mode: Mode,

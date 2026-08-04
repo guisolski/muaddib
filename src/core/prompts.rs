@@ -1,7 +1,9 @@
 use crate::core::answer::{ANSWER_SCHEMA, FAST_ANSWER_SCHEMA};
 use crate::core::citations::MergedFindings;
+use crate::core::context::{ResearchContext, context_prompt_block};
 use crate::core::mode::ModeSpec;
 use crate::core::plan::{SearchPlan, SubQuery};
+use crate::core::readability::{PageText, pages_prompt_block};
 use crate::core::websearch::{WebHit, hits_prompt_block};
 
 pub const EXPANSION_MARKER: &str = "MUADDIB:EXPAND";
@@ -9,12 +11,19 @@ pub const SUB_SEARCH_MARKER: &str = "MUADDIB:SUBSEARCH";
 pub const SYNTHESIS_MARKER: &str = "MUADDIB:SYNTH";
 pub const FAST_MARKER: &str = "MUADDIB:FAST";
 
-pub fn fast_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, inline_schema: bool) -> String {
+pub fn fast_prompt(
+    query: &str,
+    mode: &ModeSpec,
+    answer_lang: &str,
+    inline_schema: bool,
+    context: &ResearchContext,
+) -> String {
     format!(
         "[task {FAST_MARKER}] You are the fast lane of a meta-search engine. Speed is the \
          priority: the whole answer must be produced in a few seconds.\n\
          Run ONE web search for the query below, consult at most 4 pages, and answer immediately.\n\
          Search mode: {label}. {instructions}\n\
+         {context_block}\
          Write the entire answer in {answer_lang}. Every title, paragraph, list item, and \
          follow-up must be in {answer_lang}.\n\
          Query: {query}\n\
@@ -31,6 +40,7 @@ pub fn fast_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, inline_schem
          {output_contract}",
         label = mode.label,
         instructions = mode.instructions,
+        context_block = context_prompt_block(context),
         output_contract = fast_output_contract(inline_schema),
     )
 }
@@ -46,7 +56,13 @@ fn structured_output_contract() -> String {
         .to_string()
 }
 
-pub fn expansion_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, breadth: u8) -> String {
+pub fn expansion_prompt(
+    query: &str,
+    mode: &ModeSpec,
+    answer_lang: &str,
+    breadth: u8,
+    context: &ResearchContext,
+) -> String {
     format!(
         "[task {EXPANSION_MARKER}] You are the query planner of a meta-search engine.\n\
          First rate the query complexity: \"simple\" when one direct search fully answers it \
@@ -54,6 +70,7 @@ pub fn expansion_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, breadth
          For a simple query return exactly one sub-query: the query itself.\n\
          Otherwise expand the query below into at most {breadth} sub-queries covering distinct facets of the topic.{cross_language_rule}\n\
          Search mode: {label}. {instructions}\n\
+         {context_block}\
          The final answer will be written in {answer_lang}.\n\
          Query: {query}\n\
          Reply with ONLY this JSON, no prose:\n\
@@ -61,6 +78,7 @@ pub fn expansion_prompt(query: &str, mode: &ModeSpec, answer_lang: &str, breadth
         cross_language_rule = cross_language_rule(mode),
         label = mode.label,
         instructions = mode.instructions,
+        context_block = context_prompt_block(context),
     )
 }
 
@@ -73,12 +91,18 @@ fn cross_language_rule(mode: &ModeSpec) -> &'static str {
     }
 }
 
-pub fn sub_search_prompt(sub: &SubQuery, mode: &ModeSpec, hits: &[WebHit]) -> String {
+pub fn sub_search_prompt(
+    sub: &SubQuery,
+    mode: &ModeSpec,
+    hits: &[WebHit],
+    pages: &[PageText],
+) -> String {
     format!(
         "[task {SUB_SEARCH_MARKER}] Search the web for: {query}\n\
          Query language: {lang}.\n\
          Search mode: {label}. {instructions}\n\
          {hits_block}\
+         {pages_block}\
          Collect concrete findings, each with the exact URL of the page that supports it.\n\
          Only report URLs of pages you actually consulted; never invent or guess a URL.\n\
          When a consulted page shows a relevant image (photo, chart, figure), add the \
@@ -91,14 +115,21 @@ pub fn sub_search_prompt(sub: &SubQuery, mode: &ModeSpec, hits: &[WebHit]) -> St
         label = mode.label,
         instructions = mode.instructions,
         hits_block = hits_prompt_block(hits),
+        pages_block = pages_prompt_block(pages),
     )
 }
 
-pub fn synthesis_prompt(plan: &SearchPlan, merged: &MergedFindings, inline_schema: bool) -> String {
+pub fn synthesis_prompt(
+    plan: &SearchPlan,
+    merged: &MergedFindings,
+    inline_schema: bool,
+    context: &ResearchContext,
+) -> String {
     format!(
         "[task {SYNTHESIS_MARKER}] You are the answer compiler of a meta-search engine.\n\
          Original query: {original}\n\
          Search mode: {label}. {instructions}\n\
+         {context_block}\
          Write the entire answer in {answer_lang}. Every title, paragraph, label, and follow-up \
          must be in {answer_lang}.\n\
          Findings collected by parallel web searches, as JSON:\n{findings_json}\n\
@@ -125,6 +156,7 @@ pub fn synthesis_prompt(plan: &SearchPlan, merged: &MergedFindings, inline_schem
         original = plan.original,
         label = plan.mode.spec().label,
         instructions = plan.mode.spec().instructions,
+        context_block = context_prompt_block(context),
         answer_lang = plan.answer_lang,
         findings_json = findings_json(merged),
         output_contract = output_contract(inline_schema),
@@ -191,22 +223,27 @@ mod tests {
         let cases = [
             Case {
                 name: "expansion",
-                prompt: expansion_prompt("q", mode, "en", 3),
+                prompt: expansion_prompt("q", mode, "en", 3, &ResearchContext::default()),
                 marker: EXPANSION_MARKER,
             },
             Case {
                 name: "sub search",
-                prompt: sub_search_prompt(&sub, mode, &[]),
+                prompt: sub_search_prompt(&sub, mode, &[], &[]),
                 marker: SUB_SEARCH_MARKER,
             },
             Case {
                 name: "synthesis",
-                prompt: synthesis_prompt(&sample_plan(), &sample_merged(), false),
+                prompt: synthesis_prompt(
+                    &sample_plan(),
+                    &sample_merged(),
+                    false,
+                    &ResearchContext::default(),
+                ),
                 marker: SYNTHESIS_MARKER,
             },
             Case {
                 name: "fast",
-                prompt: fast_prompt("q", mode, "en", false),
+                prompt: fast_prompt("q", mode, "en", false, &ResearchContext::default()),
                 marker: FAST_MARKER,
             },
         ];
@@ -218,7 +255,13 @@ mod tests {
     #[test]
     fn expansion_prompt_embeds_mode_breadth_and_language() {
         let mode = Mode::Scientific.spec();
-        let prompt = expansion_prompt("quantum computing", mode, "pt-BR", 4);
+        let prompt = expansion_prompt(
+            "quantum computing",
+            mode,
+            "pt-BR",
+            4,
+            &ResearchContext::default(),
+        );
         assert!(prompt.contains("at most 4 sub-queries"));
         assert!(prompt.contains(mode.instructions));
         assert!(prompt.contains("pt-BR"));
@@ -233,7 +276,7 @@ mod tests {
             lang: "en".to_string(),
             rationale: String::new(),
         };
-        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &[]);
+        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &[], &[]);
         assert!(prompt.contains("graphene batteries"));
         assert!(prompt.contains("never invent or guess a URL"));
         assert!(prompt.contains("\"findings\""));
@@ -246,7 +289,7 @@ mod tests {
             lang: "en".to_string(),
             rationale: String::new(),
         };
-        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &[]);
+        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &[], &[]);
         assert!(!prompt.contains("Candidate sources"));
         assert!(prompt.contains("Search mode: General."));
         assert!(prompt.contains(&format!(
@@ -268,7 +311,7 @@ mod tests {
             snippet: "A language empowering everyone.".to_string(),
             engine: "ddg",
         }];
-        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &hits);
+        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &hits, &[]);
         assert!(prompt.contains(SUB_SEARCH_MARKER));
         assert!(prompt.contains("Candidate sources found by conventional search engines"));
         assert!(prompt.contains("https://www.rust-lang.org/"));
@@ -279,8 +322,91 @@ mod tests {
     }
 
     #[test]
+    fn context_block_appears_only_in_follow_up_prompts() {
+        use crate::core::context::ContextStep;
+        let mode = Mode::General.spec();
+        let context = ResearchContext {
+            steps: vec![ContextStep {
+                query: "earlier question".to_string(),
+                summary: "earlier digest".to_string(),
+                source_urls: vec!["https://one.example/a".to_string()],
+            }],
+            omitted: 0,
+        };
+        struct Case {
+            name: &'static str,
+            fresh: String,
+            follow_up: String,
+        }
+        let cases = [
+            Case {
+                name: "expansion",
+                fresh: expansion_prompt("q", mode, "en", 3, &ResearchContext::default()),
+                follow_up: expansion_prompt("q", mode, "en", 3, &context),
+            },
+            Case {
+                name: "synthesis",
+                fresh: synthesis_prompt(
+                    &sample_plan(),
+                    &sample_merged(),
+                    false,
+                    &ResearchContext::default(),
+                ),
+                follow_up: synthesis_prompt(&sample_plan(), &sample_merged(), false, &context),
+            },
+            Case {
+                name: "fast",
+                fresh: fast_prompt("q", mode, "en", false, &ResearchContext::default()),
+                follow_up: fast_prompt("q", mode, "en", false, &context),
+            },
+        ];
+        for case in cases {
+            assert!(!case.fresh.contains("research thread"), "{}", case.name);
+            assert!(case.follow_up.contains("research thread"), "{}", case.name);
+            assert!(case.follow_up.contains("earlier question"), "{}", case.name);
+            assert!(
+                case.follow_up.contains("https://one.example/a"),
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn sub_search_prompt_grounds_the_search_with_page_content() {
+        let sub = SubQuery {
+            query: "rust language".to_string(),
+            lang: "en".to_string(),
+            rationale: String::new(),
+        };
+        let hits = [WebHit {
+            title: "Rust".to_string(),
+            url: "https://www.rust-lang.org/".to_string(),
+            snippet: "A language empowering everyone.".to_string(),
+            engine: "ddg",
+        }];
+        let pages = [PageText {
+            url: "https://www.rust-lang.org/".to_string(),
+            text: "Rust is blazingly fast and memory-efficient.".to_string(),
+        }];
+        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &hits, &pages);
+        assert!(prompt.contains("Fetched page content"));
+        assert!(prompt.contains("Rust is blazingly fast and memory-efficient."));
+        let hits_at = prompt.find("Candidate sources").unwrap();
+        let pages_at = prompt.find("Fetched page content").unwrap();
+        let findings_at = prompt.find("Collect concrete findings").unwrap();
+        assert!(hits_at < pages_at);
+        assert!(pages_at < findings_at);
+    }
+
+    #[test]
     fn synthesis_prompt_embeds_findings_language_and_rules() {
-        let prompt = synthesis_prompt(&sample_plan(), &sample_merged(), false);
+        let prompt = synthesis_prompt(
+            &sample_plan(),
+            &sample_merged(),
+            false,
+            &ResearchContext::default(),
+        );
         assert!(prompt.contains("solar energy in brazil"));
         assert!(prompt.contains("pt-BR"));
         assert!(prompt.contains("https://example.com/report"));
@@ -293,14 +419,24 @@ mod tests {
 
     #[test]
     fn synthesis_prompt_mentions_emphasis() {
-        let prompt = synthesis_prompt(&sample_plan(), &sample_merged(), false);
+        let prompt = synthesis_prompt(
+            &sample_plan(),
+            &sample_merged(),
+            false,
+            &ResearchContext::default(),
+        );
         assert!(prompt.contains("emphasis"));
         assert!(prompt.contains("\"highlight\""));
     }
 
     #[test]
     fn synthesis_prompt_requests_a_diagram_and_compact_blocks() {
-        let prompt = synthesis_prompt(&sample_plan(), &sample_merged(), false);
+        let prompt = synthesis_prompt(
+            &sample_plan(),
+            &sample_merged(),
+            false,
+            &ResearchContext::default(),
+        );
         assert!(prompt.contains("diagram"));
         assert!(prompt.contains("\"flow\""));
         assert!(prompt.contains("\"timeline\""));
@@ -314,21 +450,32 @@ mod tests {
             lang: "en".to_string(),
             rationale: String::new(),
         };
-        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &[]);
+        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &[], &[]);
         assert!(prompt.contains("image_url"));
         assert!(prompt.contains("direct URL of that image"));
     }
 
     #[test]
     fn synthesis_prompt_allows_image_blocks_from_findings_only() {
-        let prompt = synthesis_prompt(&sample_plan(), &sample_merged(), false);
+        let prompt = synthesis_prompt(
+            &sample_plan(),
+            &sample_merged(),
+            false,
+            &ResearchContext::default(),
+        );
         assert!(prompt.contains("image block"));
         assert!(prompt.contains("image_url"));
     }
 
     #[test]
     fn expansion_prompt_asks_for_a_complexity_rating() {
-        let prompt = expansion_prompt("q", Mode::General.spec(), "en", 3);
+        let prompt = expansion_prompt(
+            "q",
+            Mode::General.spec(),
+            "en",
+            3,
+            &ResearchContext::default(),
+        );
         assert!(prompt.contains("complexity"));
         assert!(prompt.contains("\"simple\""));
         assert!(prompt.contains("exactly one sub-query"));
@@ -336,15 +483,31 @@ mod tests {
 
     #[test]
     fn synthesis_prompt_inlines_schema_only_when_requested() {
-        let with_schema = synthesis_prompt(&sample_plan(), &sample_merged(), true);
-        let without_schema = synthesis_prompt(&sample_plan(), &sample_merged(), false);
+        let with_schema = synthesis_prompt(
+            &sample_plan(),
+            &sample_merged(),
+            true,
+            &ResearchContext::default(),
+        );
+        let without_schema = synthesis_prompt(
+            &sample_plan(),
+            &sample_merged(),
+            false,
+            &ResearchContext::default(),
+        );
         assert!(with_schema.contains("$schema"));
         assert!(!without_schema.contains("$schema"));
     }
 
     #[test]
     fn fast_prompt_asks_for_one_search_and_bans_rich_blocks() {
-        let prompt = fast_prompt("capital of peru", Mode::General.spec(), "pt-BR", false);
+        let prompt = fast_prompt(
+            "capital of peru",
+            Mode::General.spec(),
+            "pt-BR",
+            false,
+            &ResearchContext::default(),
+        );
         assert!(prompt.contains("capital of peru"));
         assert!(prompt.contains("pt-BR"));
         assert!(prompt.contains("ONE web search"));
@@ -358,12 +521,33 @@ mod tests {
 
     #[test]
     fn fast_prompt_inlines_the_fast_schema_only_when_requested() {
-        let with_schema = fast_prompt("q", Mode::General.spec(), "en", true);
-        let without_schema = fast_prompt("q", Mode::General.spec(), "en", false);
+        let with_schema = fast_prompt(
+            "q",
+            Mode::General.spec(),
+            "en",
+            true,
+            &ResearchContext::default(),
+        );
+        let without_schema = fast_prompt(
+            "q",
+            Mode::General.spec(),
+            "en",
+            false,
+            &ResearchContext::default(),
+        );
         assert!(with_schema.contains("$schema"));
         assert!(!with_schema.contains("\"const\": \"chart\""));
         assert!(!without_schema.contains("$schema"));
-        assert!(with_schema.len() < synthesis_prompt(&sample_plan(), &sample_merged(), true).len());
+        assert!(
+            with_schema.len()
+                < synthesis_prompt(
+                    &sample_plan(),
+                    &sample_merged(),
+                    true,
+                    &ResearchContext::default()
+                )
+                .len()
+        );
     }
 
     #[test]
@@ -375,11 +559,22 @@ mod tests {
         let cases = [
             Case {
                 name: "synthesis",
-                prompt: synthesis_prompt(&sample_plan(), &sample_merged(), false),
+                prompt: synthesis_prompt(
+                    &sample_plan(),
+                    &sample_merged(),
+                    false,
+                    &ResearchContext::default(),
+                ),
             },
             Case {
                 name: "fast",
-                prompt: fast_prompt("q", Mode::General.spec(), "en", false),
+                prompt: fast_prompt(
+                    "q",
+                    Mode::General.spec(),
+                    "en",
+                    false,
+                    &ResearchContext::default(),
+                ),
             },
         ];
         for case in cases {
@@ -408,11 +603,22 @@ mod tests {
         let cases = [
             Case {
                 name: "synthesis",
-                prompt: synthesis_prompt(&sample_plan(), &sample_merged(), true),
+                prompt: synthesis_prompt(
+                    &sample_plan(),
+                    &sample_merged(),
+                    true,
+                    &ResearchContext::default(),
+                ),
             },
             Case {
                 name: "fast",
-                prompt: fast_prompt("q", Mode::General.spec(), "en", true),
+                prompt: fast_prompt(
+                    "q",
+                    Mode::General.spec(),
+                    "en",
+                    true,
+                    &ResearchContext::default(),
+                ),
             },
         ];
         for case in cases {
@@ -437,9 +643,26 @@ mod tests {
             "{output_contract}",
         ];
         let prompts = [
-            expansion_prompt("q", Mode::General.spec(), "en", 3),
-            synthesis_prompt(&sample_plan(), &sample_merged(), true),
-            fast_prompt("q", Mode::General.spec(), "en", true),
+            expansion_prompt(
+                "q",
+                Mode::General.spec(),
+                "en",
+                3,
+                &ResearchContext::default(),
+            ),
+            synthesis_prompt(
+                &sample_plan(),
+                &sample_merged(),
+                true,
+                &ResearchContext::default(),
+            ),
+            fast_prompt(
+                "q",
+                Mode::General.spec(),
+                "en",
+                true,
+                &ResearchContext::default(),
+            ),
         ];
         for prompt in &prompts {
             for placeholder in placeholders {

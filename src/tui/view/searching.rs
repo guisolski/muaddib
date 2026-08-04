@@ -48,6 +48,12 @@ fn panel_lines(app: &App, include_mascot: bool, width: usize) -> Vec<Line<'stati
     if let Some(count) = app.search.web_hits {
         lines.push(Line::styled(format!("web hits: {count}"), theme::dim()));
     }
+    if app.search.pages_fetched > 0 {
+        lines.push(Line::styled(
+            format!("page content: {} pages", app.search.pages_fetched),
+            theme::dim(),
+        ));
+    }
     if app.search.synthesizing {
         lines.push(Line::default());
         lines.push(Line::from(vec![

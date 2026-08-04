@@ -7,6 +7,9 @@ use muaddib::engines::{EngineSpec, EngineStatus, choose_engine, detect_engines};
 use muaddib::history_store;
 use muaddib::pipeline::search::{SearchRequest, spawn_search};
 use muaddib::pipeline::{LinkStatus, SearchEvent};
+use muaddib::tree_store;
+use muaddib::tui::SessionStart;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -43,6 +46,9 @@ struct Cli {
     #[arg(long, help = "Run headless and print the answer JSON to stdout")]
     print: bool,
 
+    #[arg(long, help = "Reopen a saved research session file in the TUI")]
+    session: Option<PathBuf>,
+
     #[arg(long, help = "Erase the saved search history and exit")]
     clear_history: bool,
 }
@@ -62,12 +68,36 @@ async fn main() -> ExitCode {
     if cli.print {
         run_headless(&cli, &config, &statuses).await
     } else {
-        match muaddib::tui::run(config, statuses, cli.query.clone(), cli.mode, cli.fast).await {
+        let session = load_session(cli.session.as_deref());
+        match muaddib::tui::run(
+            config,
+            statuses,
+            cli.query.clone(),
+            cli.mode,
+            cli.fast,
+            session,
+        )
+        .await
+        {
             Ok(()) => ExitCode::SUCCESS,
             Err(error) => {
                 eprintln!("muaddib: {error}");
                 ExitCode::FAILURE
             }
+        }
+    }
+}
+
+fn load_session(path: Option<&Path>) -> Option<SessionStart> {
+    let path = path?;
+    match tree_store::load(path) {
+        Ok(session) => Some(SessionStart {
+            tree: session.tree,
+            path: path.to_path_buf(),
+        }),
+        Err(error) => {
+            eprintln!("muaddib: {error}");
+            None
         }
     }
 }
@@ -181,7 +211,11 @@ fn report_progress(event: &SearchEvent) {
                 eprintln!("  [{}] {}", sub.lang, sub.query);
             }
         }
-        SearchEvent::WebHits { count } => eprintln!("muaddib: web hits: {count}"),
+        SearchEvent::WebHits { count, .. } => eprintln!("muaddib: web hits: {count}"),
+        SearchEvent::PageFetched { url, ok } => {
+            let outcome = if *ok { "fetched" } else { "skipped" };
+            eprintln!("muaddib: page {url} {outcome}");
+        }
         SearchEvent::SubQueryFinished { idx, ok } => {
             let outcome = if *ok { "done" } else { "failed" };
             eprintln!("muaddib: sub-query {} {outcome}", idx + 1);

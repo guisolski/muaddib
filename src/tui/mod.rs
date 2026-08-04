@@ -11,23 +11,31 @@ pub mod widgets;
 
 use crate::config_store;
 use crate::core::config::Config;
+use crate::core::context::context_for;
 use crate::core::history::{push_recall, repeats_latest};
 use crate::core::mode::Mode;
+use crate::core::tree::ResearchTree;
 use crate::engines::cli::CliEngine;
 use crate::engines::{EngineSpec, EngineStatus, choose_engine};
 use crate::history_store;
 use crate::pipeline::SearchEvent;
 use crate::pipeline::search::{SearchRequest, spawn_search};
-use crate::tui::app::App;
+use crate::tree_store;
+use crate::tui::app::{App, Screen};
 use crate::tui::event::{AppEvent, Command};
 use crate::tui::update::update;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Receiver;
 
 const TICK_INTERVAL: Duration = Duration::from_millis(100);
+
+pub struct SessionStart {
+    pub tree: ResearchTree,
+    pub path: std::path::PathBuf,
+}
 
 pub async fn run(
     config: Config,
@@ -35,9 +43,22 @@ pub async fn run(
     initial_query: Option<String>,
     initial_mode: Option<Mode>,
     fast: bool,
+    session: Option<SessionStart>,
 ) -> anyhow::Result<()> {
     let mut app = App::new(config, statuses, initial_mode, fast);
     app.history = history_store::load_recall();
+    app.clock_unix = unix_seconds();
+    if let Some(session) = session {
+        app.tree = session.tree;
+        app.session_path = Some(session.path);
+        if app.tree.current.is_none() {
+            app.tree.current = app.tree.nodes.last().map(|node| node.id);
+        }
+        if let Some(node) = app.tree.current_node() {
+            app.search.answer = Some(node.answer.clone());
+            app.screen = Screen::Results;
+        }
+    }
     if let Some(query) = initial_query {
         app.input = tui_input::Input::new(query.clone());
         start_search(&mut app, &query);
@@ -64,6 +85,7 @@ async fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> a
     let mut terminal_events = EventStream::new();
     let mut ticker = tokio::time::interval(TICK_INTERVAL);
     loop {
+        app.clock_unix = unix_seconds();
         terminal.draw(|frame| view::draw(frame, app))?;
         let app_event = tokio::select! {
             maybe_event = terminal_events.next() => {
@@ -114,9 +136,26 @@ fn dispatch_command(app: &mut App, command: Command) -> bool {
         Command::CancelSearch => app.end_search(),
         Command::OpenUrl(url) => open_url(&url),
         Command::SaveConfig => save_config(app),
+        Command::SaveSession => save_session(app),
         Command::ClearHistory => clear_history(app),
     }
     false
+}
+
+fn save_session(app: &mut App) {
+    match tree_store::save(&app.tree, app.session_path.as_deref()) {
+        Ok(path) => {
+            app.notice = Some(format!("session saved to {}", path.display()));
+            app.session_path = Some(path);
+        }
+        Err(error) => app.notice = Some(format!("failed to save session: {error}")),
+    }
+}
+
+fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
 }
 
 fn start_search(app: &mut App, query: &str) {
@@ -127,12 +166,19 @@ fn start_search(app: &mut App, query: &str) {
                 return;
             };
             let engine = engine.with_model(search_model(&app.config, status.spec, app.fast));
-            let request = SearchRequest::from_config(
-                query.to_string(),
-                app.current_mode(),
-                app.fast,
-                &app.config,
-            );
+            let context = app
+                .pending_parent
+                .map(|parent| context_for(&app.tree, parent))
+                .unwrap_or_default();
+            let request = SearchRequest {
+                context,
+                ..SearchRequest::from_config(
+                    query.to_string(),
+                    app.current_mode(),
+                    app.fast,
+                    &app.config,
+                )
+            };
             app.begin_search();
             app.notice = notice;
             record_history(app, query);

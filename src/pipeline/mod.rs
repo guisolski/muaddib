@@ -2,6 +2,8 @@
 pub(crate) mod http;
 #[cfg(feature = "link-validation")]
 pub mod images;
+#[cfg(feature = "websearch")]
+pub mod pages;
 pub mod search;
 #[cfg(feature = "link-validation")]
 pub mod validate;
@@ -14,7 +16,8 @@ use crate::core::plan::SearchPlan;
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchEvent {
     PlanReady(SearchPlan),
-    WebHits { count: usize },
+    WebHits { count: usize, urls: Vec<String> },
+    PageFetched { url: String, ok: bool },
     SubQueryStarted { idx: usize },
     SubQueryFinished { idx: usize, ok: bool },
     SynthesisStarted,

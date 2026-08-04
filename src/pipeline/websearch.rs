@@ -1,6 +1,7 @@
 use crate::core::citations::normalize_url;
 use crate::core::config::WebSearchConfig;
 use crate::core::plan::SearchPlan;
+use crate::core::rank::{pool_budget, rank_hits};
 use crate::core::websearch::{WebEngineSpec, WebHit, engines_for_mode, fallback_engine};
 use crate::pipeline::SearchEvent;
 use futures::stream::{self, StreamExt};
@@ -14,9 +15,14 @@ use tokio::sync::mpsc::Sender;
 pub const WEB_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 #[cfg(feature = "websearch")]
 const WEB_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(feature = "websearch")]
+const PAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(4);
+#[cfg(feature = "websearch")]
+const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 const CONCURRENT_WEB_QUERIES: usize = 2;
 
 pub type BoxedHitsFuture<'a> = Pin<Box<dyn Future<Output = Vec<WebHit>> + Send + 'a>>;
+pub type BoxedPageFuture<'a> = Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;
 
 pub trait WebFetcher: Send + Sync {
     fn search<'a>(
@@ -26,6 +32,10 @@ pub trait WebFetcher: Send + Sync {
         mailto: &'a str,
         max_hits: usize,
     ) -> BoxedHitsFuture<'a>;
+
+    fn fetch_page<'a>(&'a self, _url: &'a str) -> BoxedPageFuture<'a> {
+        Box::pin(async { None })
+    }
 }
 
 pub struct NoopWebFetcher;
@@ -81,6 +91,46 @@ impl WebFetcher for HttpWebFetcher {
             }
         })
     }
+
+    fn fetch_page<'a>(&'a self, url: &'a str) -> BoxedPageFuture<'a> {
+        Box::pin(async move {
+            match &self.client {
+                Some(client) => fetch_page_body(client, url).await,
+                None => None,
+            }
+        })
+    }
+}
+
+#[cfg(feature = "websearch")]
+async fn fetch_page_body(client: &reqwest::Client, url: &str) -> Option<String> {
+    let response = client
+        .get(url)
+        .timeout(PAGE_FETCH_TIMEOUT)
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let html_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.starts_with("text/html") || value.starts_with("application/xhtml")
+        });
+    if !html_type {
+        return None;
+    }
+    let too_large = response
+        .content_length()
+        .is_some_and(|length| length > MAX_PAGE_BYTES as u64);
+    if too_large {
+        return None;
+    }
+    let bytes = response.bytes().await.ok()?;
+    (bytes.len() <= MAX_PAGE_BYTES).then(|| String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[cfg(feature = "websearch")]
@@ -146,8 +196,22 @@ pub async fn websearch_stage(
         .collect()
         .await;
     let count = per_query.iter().map(Vec::len).sum();
-    let _ = tx.send(SearchEvent::WebHits { count }).await;
+    let urls = consulted_urls(&per_query);
+    let _ = tx.send(SearchEvent::WebHits { count, urls }).await;
     per_query
+}
+
+pub const MAX_REPORTED_URLS: usize = 30;
+
+fn consulted_urls(per_query: &[Vec<WebHit>]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    per_query
+        .iter()
+        .flatten()
+        .filter(|hit| seen.insert(normalize_url(&hit.url)))
+        .map(|hit| hit.url.clone())
+        .take(MAX_REPORTED_URLS)
+        .collect()
 }
 
 async fn query_hits(
@@ -158,10 +222,11 @@ async fn query_hits(
 ) -> Vec<WebHit> {
     let deadline = tokio::time::Instant::now() + WEB_QUERY_TIMEOUT;
     let budget = usize::from(config.max_hits_per_query);
-    let mut hits: Vec<WebHit> = Vec::new();
+    let pool_target = pool_budget(budget);
+    let mut pool: Vec<WebHit> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for spec in engines {
-        let remaining = budget.saturating_sub(hits.len());
+        let remaining = pool_target.saturating_sub(pool.len());
         let time_left = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining == 0 || time_left.is_zero() {
             break;
@@ -172,14 +237,14 @@ async fn query_hits(
         )
         .await
         .unwrap_or_default();
-        hits.extend(
+        pool.extend(
             engine_hits
                 .into_iter()
                 .filter(|hit| seen.insert(normalize_url(&hit.url)))
                 .take(remaining),
         );
     }
-    hits
+    rank_hits(query, &pool, budget)
 }
 
 async fn engine_hits_with_fallback(
@@ -308,18 +373,54 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].len(), 2);
         assert_eq!(hits[0], hits[1]);
-        assert_eq!(events, vec![SearchEvent::WebHits { count: 4 }]);
+        assert_eq!(
+            events,
+            vec![SearchEvent::WebHits {
+                count: 4,
+                urls: vec![
+                    "https://a.example/1".to_string(),
+                    "https://a.example/2".to_string()
+                ],
+            }]
+        );
     }
 
     #[tokio::test]
-    async fn waterfall_stops_once_the_budget_is_met() {
-        let fetcher = FakeFetcher::with(BTreeMap::from([(
-            "ddg",
-            vec![hit("https://a.example/1"), hit("https://a.example/2")],
-        )]));
+    async fn waterfall_stops_once_the_pool_budget_is_met() {
+        let overfull: Vec<WebHit> = (1..=7)
+            .map(|idx| hit(&format!("https://a.example/{idx}")))
+            .collect();
+        let fetcher = FakeFetcher::with(BTreeMap::from([("ddg", overfull)]));
         let (hits, _) = run_stage(&fetcher, &plan(&["only"]), &config(2)).await;
         assert_eq!(hits[0].len(), 2);
         assert_eq!(fetcher.called(), vec!["ddg"]);
+    }
+
+    #[tokio::test]
+    async fn relevant_hit_from_a_later_engine_outranks_earlier_filler() {
+        let fetcher = FakeFetcher::with(BTreeMap::from([
+            (
+                "ddg",
+                vec![WebHit {
+                    title: "gardening tips".to_string(),
+                    url: "https://garden.example".to_string(),
+                    snippet: "flowers and soil".to_string(),
+                    engine: "ddg",
+                }],
+            ),
+            (
+                "bing",
+                vec![WebHit {
+                    title: "rust tokio runtime deep dive".to_string(),
+                    url: "https://tokio.example".to_string(),
+                    snippet: "tokio internals explained".to_string(),
+                    engine: "bing",
+                }],
+            ),
+        ]));
+        let (hits, _) = run_stage(&fetcher, &plan(&["rust tokio runtime"]), &config(1)).await;
+        let urls: Vec<&str> = hits[0].iter().map(|hit| hit.url.as_str()).collect();
+        assert_eq!(urls, vec!["https://tokio.example"]);
     }
 
     #[tokio::test]
@@ -330,7 +431,7 @@ mod tests {
         )]));
         let (hits, _) = run_stage(&fetcher, &plan(&["only"]), &config(1)).await;
         assert_eq!(hits[0][0].url, "https://lite.example/1");
-        assert_eq!(fetcher.called(), vec!["ddg", "ddg-lite"]);
+        assert_eq!(fetcher.called(), vec!["ddg", "ddg-lite", "bing"]);
     }
 
     #[tokio::test]

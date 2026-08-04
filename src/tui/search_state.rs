@@ -37,6 +37,8 @@ pub enum SearchOutcome {
 pub struct SearchState {
     pub plan: Option<SearchPlan>,
     pub web_hits: Option<usize>,
+    pub web_urls: Vec<String>,
+    pub pages_fetched: usize,
     pub progress: Vec<SubQueryState>,
     pub synthesizing: bool,
     pub started_at: Option<Instant>,
@@ -53,6 +55,8 @@ impl SearchState {
     pub fn begin(&mut self, now: Instant) {
         self.plan = None;
         self.web_hits = None;
+        self.web_urls = Vec::new();
+        self.pages_fetched = 0;
         self.progress.clear();
         self.synthesizing = false;
         self.answer = None;
@@ -93,8 +97,15 @@ impl SearchState {
                 self.plan = Some(plan);
                 SearchOutcome::None
             }
-            SearchEvent::WebHits { count } => {
+            SearchEvent::WebHits { count, urls } => {
                 self.web_hits = Some(count);
+                self.web_urls = urls;
+                SearchOutcome::None
+            }
+            SearchEvent::PageFetched { ok, .. } => {
+                if ok {
+                    self.pages_fetched += 1;
+                }
                 SearchOutcome::None
             }
             SearchEvent::SubQueryStarted { idx } => {
@@ -243,11 +254,41 @@ mod tests {
     #[test]
     fn apply_event_stores_the_web_hit_count() {
         let mut state = SearchState::default();
-        let outcome = state.apply_event(SearchEvent::WebHits { count: 7 }, 0);
+        let outcome = state.apply_event(
+            SearchEvent::WebHits {
+                count: 7,
+                urls: vec!["https://a.example".to_string()],
+            },
+            0,
+        );
         assert_eq!(outcome, SearchOutcome::None);
         assert_eq!(state.web_hits, Some(7));
+        assert_eq!(state.web_urls, vec!["https://a.example"]);
         state.begin(Instant::now());
         assert_eq!(state.web_hits, None);
+        assert!(state.web_urls.is_empty());
+    }
+
+    #[test]
+    fn apply_event_counts_only_successful_page_fetches() {
+        let mut state = SearchState::default();
+        state.apply_event(
+            SearchEvent::PageFetched {
+                url: "https://a".to_string(),
+                ok: true,
+            },
+            0,
+        );
+        state.apply_event(
+            SearchEvent::PageFetched {
+                url: "https://b".to_string(),
+                ok: false,
+            },
+            0,
+        );
+        assert_eq!(state.pages_fetched, 1);
+        state.begin(Instant::now());
+        assert_eq!(state.pages_fetched, 0);
     }
 
     #[test]

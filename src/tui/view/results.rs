@@ -112,7 +112,7 @@ fn draw_images(
 
 fn footer_hint(focus: Focus) -> &'static str {
     match focus {
-        Focus::Body => "j/k scroll · Tab focus · 1-9 source · n new · / refine · Esc home · q quit",
+        Focus::Body => "j/k scroll · Tab focus · f follow-up · t tree · s save · n new · Esc home",
         Focus::Sources(_) => "j/k select source · Enter open · Tab follow-ups · Esc home",
         Focus::Followups(_) => "j/k select follow-up · Enter search it · Tab body · Esc home",
     }
@@ -131,9 +131,9 @@ mod tests {
         }
         let cases = [
             Case {
-                name: "body hints scrolling and jumps",
+                name: "body hints branching and the tree",
                 focus: Focus::Body,
-                want_fragment: "1-9 source",
+                want_fragment: "f follow-up · t tree · s save",
             },
             Case {
                 name: "sources hints opening",

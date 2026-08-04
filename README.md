@@ -63,8 +63,15 @@ instinct) — the mouse kept the nose.
   endpoints and public APIs.
 - **Grounded in real indexes.** Before the AI fans out, each sub-query also runs
   against conventional search engines (DuckDuckGo, Bing, Mojeek) and — in
-  Scientific mode — scholarly APIs (OpenAlex, Crossref, Semantic Scholar), and the
-  results are handed to the AI as candidate sources to verify and cite.
+  Scientific mode — scholarly APIs (OpenAlex, Crossref, Semantic Scholar). The
+  pooled hits are reranked with BM25, handed to the AI as candidate sources to
+  verify and cite, and in Scientific and Deep modes the top pages are fetched
+  and their readable text fed to the searches.
+- **Research grows as a tree.** Ask a follow-up (`f`) and it branches from the
+  answer you are reading, carrying the questions, answers, and sources of the
+  path so far into the next search. Navigate the tree (`t`), revisit any node,
+  branch again from anywhere, and save the whole session to disk (`s`) to
+  reopen later with `--session`.
 - **Fast and light.** A single small Rust binary. Sub-searches fan out concurrently
   with bounded parallelism; the UI stays at 60fps-smooth 100ms ticks; Esc cancels
   everything and reaps child processes instantly.
@@ -76,8 +83,14 @@ instinct) — the mouse kept the nose.
 - Multilingual query expansion with a deterministic offline fallback
 - Built-in web-search grounding, in-binary and keyless: candidate results from
   DuckDuckGo, Bing, and Mojeek — plus OpenAlex, Crossref, and Semantic Scholar in
-  Scientific mode — are verified and cited by the AI; degrades silently and can be
-  disabled with `--no-websearch`
+  Scientific mode — are BM25-reranked, then verified and cited by the AI;
+  degrades silently and can be disabled with `--no-websearch`
+- Page-content grounding in Scientific and Deep modes: the top hits' pages are
+  fetched and boiled down to readable text that grounds each sub-search
+  (`[websearch] ground_modes`)
+- Follow-up searches that build a navigable research tree: branch from any
+  answer with `f`, explore with `t`, save the session with `s`, reopen with
+  `--session <file>`
 - Fast mode (`Ctrl+F` / `--fast`): one engine call instead of three, with a small
   model and a trimmed answer schema — ~5x faster on real queries (31s vs 166s
   measured on `claude`+`haiku`), and combines with any search mode

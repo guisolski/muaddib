@@ -1,9 +1,11 @@
 pub mod config_modal;
 pub mod doc;
+pub mod followup;
 pub mod help;
 pub mod home;
 pub mod results;
 pub mod searching;
+pub mod tree;
 
 use crate::tui::app::{App, Overlay, Screen};
 use ratatui::Frame;
@@ -13,10 +15,12 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Screen::Home => home::draw(frame, app),
         Screen::Searching => searching::draw(frame, app),
         Screen::Results => results::draw(frame, app),
+        Screen::Tree => tree::draw(frame, app),
     }
     match &app.overlay {
-        Some(Overlay::Help) => help::draw(frame),
+        Some(Overlay::Help) => help::draw(frame, app.help_scroll),
         Some(Overlay::Config(form)) => config_modal::draw(frame, app, form),
+        Some(Overlay::FollowUp(form)) => followup::draw(frame, app, form),
         None => {}
     }
 }
@@ -61,6 +65,65 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn the_help_modal_scrolls_to_reveal_every_binding_on_short_terminals() {
+        let mut app = app();
+        app.overlay = Some(Overlay::Help);
+        let backend = render(&mut app, 80, 24);
+        let text = buffer_text(&backend);
+        assert!(text.contains("keys"));
+        assert!(text.contains("↑/↓ scroll"));
+        app.help_scroll = help::max_scroll(24);
+        let backend = render(&mut app, 80, 24);
+        let text = buffer_text(&backend);
+        assert!(text.contains("Research tree"));
+        assert!(text.contains("save session"));
+        assert!(text.contains("Config modal"));
+        app.help_scroll = 0;
+        let backend = render(&mut app, 80, 60);
+        let text = buffer_text(&backend);
+        assert!(text.contains("research tree"));
+        assert!(text.contains("follow-up search"));
+        assert!(!text.contains("↑/↓ scroll"));
+    }
+
+    #[test]
+    fn the_tree_screen_renders_nodes_and_the_followup_overlay_takes_the_cursor() {
+        use crate::core::answer::Answer;
+        use crate::core::mode::Mode;
+        use crate::core::tree::NodeSeed;
+        use crate::tui::app::FollowUpForm;
+        let mut app = app();
+        let root = app.tree.add_node(
+            None,
+            NodeSeed {
+                query: "spice cycles".to_string(),
+                mode: Mode::Scientific,
+                fast: false,
+                started_at: 0,
+                completed_at: 0,
+                answer: Answer::default(),
+                sub_queries: Vec::new(),
+                web_urls: Vec::new(),
+            },
+        );
+        app.screen = Screen::Tree;
+        let backend = render(&mut app, 80, 24);
+        let text = buffer_text(&backend);
+        assert!(text.contains("research tree"));
+        assert!(text.contains("spice cycles"));
+        assert!(text.contains("Enter view"));
+        app.overlay = Some(Overlay::FollowUp(FollowUpForm {
+            input: tui_input::Input::new("follow".to_string()),
+            parent: root,
+        }));
+        let backend = render(&mut app, 80, 24);
+        let text = buffer_text(&backend);
+        assert!(text.contains("follow-up"));
+        assert!(text.contains("from: spice cycles"));
+        assert!(backend.cursor_visible());
     }
 
     #[test]
