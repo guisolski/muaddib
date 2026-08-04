@@ -1333,18 +1333,18 @@ mod parse_tests {
         parse_hits(engine_by_name(engine).unwrap(), body, 10)
     }
 
-    #[test]
-    fn every_parser_extracts_the_expected_first_hit() {
-        struct Case {
-            name: &'static str,
-            engine: &'static str,
-            body: &'static str,
-            want_count: usize,
-            want_title: &'static str,
-            want_url: &'static str,
-            want_snippet: &'static str,
-        }
-        let cases = [
+    struct Case {
+        name: &'static str,
+        engine: &'static str,
+        body: &'static str,
+        want_count: usize,
+        want_title: &'static str,
+        want_url: &'static str,
+        want_snippet: &'static str,
+    }
+
+    fn first_hit_cases() -> Vec<Case> {
+        vec![
             Case {
                 name: "ddg html skips ads and decodes redirects",
                 engine: "ddg",
@@ -1426,8 +1426,12 @@ mod parse_tests {
                 want_url: "https://www.semanticscholar.org/paper/649def34f8be52c8b66281af98ae884c09aef38b",
                 want_snippet: "We examined the association between daily caffeine intake and objective sleep measures in 7,000 adults. Higher intake within six hours of bedtime was associated with reduced total sleep time and increased sleep onset latency.",
             },
-        ];
-        for case in cases {
+        ]
+    }
+
+    #[test]
+    fn every_parser_extracts_the_expected_first_hit() {
+        for case in first_hit_cases() {
             let parsed = hits(case.engine, case.body);
             assert_eq!(parsed.len(), case.want_count, "{}", case.name);
             assert_eq!(parsed[0].title, case.want_title, "{}", case.name);
