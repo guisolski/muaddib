@@ -55,6 +55,14 @@ animations = true           # staggered block reveal, chart growth, jump pulses
 engine_timeout_secs = 180   # per engine call
 fast_timeout_secs = 45      # hard ceiling for the single fast-mode call, clamped to 5..=120
 
+[websearch]                 # built-in web-search grounding (ADR-0007)
+enabled = true              # query conventional engines before the AI fan-out; off in fast mode
+merge_snippets = false      # also merge hit snippets into the findings, not just the prompts
+max_hits_per_query = 5      # deduplicated hits per sub-query, clamped to 1..=10
+engines = []                # empty = mode defaults; else an allowlist of engine names
+                            # (ddg, ddg-lite, bing, mojeek, google, openalex, crossref, s2)
+mailto = ""                 # optional email for the OpenAlex/Crossref polite pools
+
 [engines.claude]            # optional, one block per engine
 bin = "/custom/path/claude" # binary override (also used by the test suite)
 model = "sonnet"            # model passed to the CLI; any value the CLI accepts
@@ -75,6 +83,7 @@ CLI flags > config file > defaults:
 | model | `--model` | `[engines.<name>] model` | engine default |
 | search mode | `--mode` | — | `general` |
 | fast mode | `--fast` | — | off (`Ctrl+F` toggles it in the TUI) |
+| web search | `--no-websearch` (disables) | `[websearch] enabled` | on |
 
 The config modal (`Ctrl+O`) edits and persists the file; `--lang`/`--engine`/
 `--model` apply to the current run only.
@@ -95,6 +104,7 @@ so it trades breadth and cross-checking for latency.
 | source cross-check | synthesized URLs must appear in the sub-search findings | the answer's own declared sources, plus link validation |
 | images | per `images` | always off |
 | link validation | per `validate_links` | per `validate_links` |
+| web-search grounding | per `[websearch]` | always off |
 
 Only `claude` ships a curated fast model. Other engines reuse their normal model
 unless you set `fast_model` yourself.
@@ -140,6 +150,7 @@ it — the first press asks, the second one deletes.
 | engine | cycles installed engines; uninstalled ones are shown but not selectable |
 | model | cycles `default` plus a curated list per engine; a custom model set in the file appears as an extra option |
 | validate links | on / off |
+| web search | on / off |
 | max parallel | 1–8 |
 
 `Enter` saves to the config file; `Esc` discards.

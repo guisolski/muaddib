@@ -1,6 +1,6 @@
 # Search pipeline
 
-`pipeline/search.rs` orchestrates six stages. All planning, merging, and
+`pipeline/search.rs` orchestrates seven stages. All planning, merging, and
 citation logic is pure (`src/core/`); the pipeline only sequences engine calls
 and emits events.
 
@@ -35,7 +35,28 @@ Note what this rating does *not* save: sub-searches already run concurrently, so
 collapsing N of them to one leaves the three serial engine round-trips intact.
 Cutting round-trips is what fast mode is for.
 
-### 2. Fan-out
+### 2. Web-search grounding
+
+With `[websearch] enabled = true` (default; forced off in fast mode and by
+`--no-websearch`), each sub-query is first run against conventional search
+engines and — in Scientific mode — scholarly APIs, all declared as rows in the
+`WEB_ENGINES` table (`core/websearch.rs`). Engines are walked as a waterfall
+per sub-query (DuckDuckGo falls back to its lite endpoint; academic engines
+come first in Scientific mode), stopping at `max_hits_per_query` deduplicated
+hits, with 2 sub-queries in flight, a 3s per-request timeout, and a 5s
+per-sub-query deadline that keeps whatever partial hits arrived. One
+`WebHits { count }` event reports the total.
+
+The hits ground the next stage: each sub-search prompt gains a "candidate
+sources" block (title, URL, snippet) the AI is told to verify before citing,
+and hit URLs join the synthesis allowlist so a cited candidate survives the
+anti-hallucination gate. With `merge_snippets = true` the hits are also merged
+into the findings themselves (claim = snippet). **Every failure is silent**:
+a blocked engine, drifted markup, or timeout contributes zero hits and the
+pipeline continues exactly as an AI-only search — this stage can only add,
+never break.
+
+### 3. Fan-out
 
 Sub-searches run through `futures::stream::buffer_unordered(max_parallel)` —
 results are consumed as they land, so one slow search never blocks the others.
@@ -50,14 +71,14 @@ Each sub-search prompt demands findings with exact URLs:
 figure) on the consulted page. A failed sub-query is dropped (with a `SubQueryFinished { ok: false }` event);
 the pipeline continues as long as at least one succeeds and produces findings.
 
-### 3. Merge (pure)
+### 4. Merge (pure)
 
 `merge_sub_results` deduplicates findings by *(normalized URL, normalized
 claim)*. URL normalization lowercases scheme and host, strips fragments and
 trailing slashes, and preserves path case. Findings without an `http(s)` URL are
 discarded here — they could never be cited.
 
-### 4. Synthesize
+### 5. Synthesize
 
 One final engine call receives the merged findings as JSON plus the answer
 schema (`core/answer.rs::ANSWER_SCHEMA` — via `--json-schema` on claude,
@@ -78,7 +99,7 @@ values — the same anti-hallucination rule sources get. `renumber_sources` then
 - drops dangling `source_ids` and deduplicates repeats,
 - renumbers sources 1..n in first-use order and prunes unused ones.
 
-### 5. Validate links
+### 6. Validate links
 
 With the `link-validation` feature (default) and `validate_links = true`, every
 source URL gets an HTTP HEAD request — 8 concurrent, 8s timeout, up to 5
@@ -86,7 +107,7 @@ redirects; 403/405/501 retry as `GET` with `Range: bytes=0-0` (some servers
 reject HEAD). Results stream to the UI as `LinkChecked` events: ✓, ✗ 404, or
 ✗ unreachable.
 
-### 6. Fetch images
+### 7. Fetch images
 
 With `images = true` (default) every surviving `image` block's URL is
 downloaded — 4 concurrent GETs, 5 MB cap — and streamed to the UI as
@@ -99,7 +120,8 @@ this stage — the JSON answer carries the image URLs themselves.
 ## Fast mode: one call
 
 `Ctrl+F` in the TUI, `--fast` on the CLI. `run_stages` branches into
-`run_fast_stages`, which collapses stages 1–4 into a single engine call:
+`run_fast_stages`, which collapses stages 1–5 into a single engine call
+(web-search grounding is skipped — latency first):
 
 1. **Plan locally.** `literal_plan` (pure) wraps the query as the one and only
    sub-query. No engine call, so `PlanReady` reaches the UI in the first frame.
@@ -113,7 +135,7 @@ this stage — the JSON answer carries the image URLs themselves.
 3. **Guard the output.** `strip_image_blocks` removes any image the model emitted
    anyway; `renumber_sources` then runs against `self_declared_urls(&answer)` —
    the answer's own `sources`, filtered to real `http(s)` URLs.
-4. **Validate links** as usual (stage 5). Stage 6 never runs: `from_config`
+4. **Validate links** as usual (stage 6). Stage 7 never runs: `from_config`
    forces `fetch_images = false` whenever `fast` is set.
 
 The model comes from `[engines.<name>] fast_model`, else the engine table's
@@ -166,6 +188,7 @@ opt-in rather than the default.
 ```rust
 enum SearchEvent {
     PlanReady(SearchPlan),
+    WebHits { count },
     SubQueryStarted { idx },
     SubQueryFinished { idx, ok },
     SynthesisStarted,
@@ -186,6 +209,8 @@ that is all Esc does.
 | Failure | Behavior |
 |---|---|
 | Expansion call fails / returns garbage | fallback facet table, search continues |
+| Web engine blocked, captcha, or markup drift | zero hits from that engine, waterfall tries the next one |
+| All web engines fail or time out | no grounding block in the prompts, AI-only search continues |
 | Some sub-queries fail | dropped; the rest proceed |
 | All sub-queries fail | `Failed("every sub-query failed…")` |
 | No findings with usable URLs | `Failed("…no findings with usable sources")` |

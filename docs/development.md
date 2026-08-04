@@ -75,7 +75,22 @@ cargo run -- --print --engine claude "rust 1.93 release highlights"
 
 Expect stderr progress lines and a JSON answer on stdout with real, validated
 source URLs. This is the recipe used at the project's "live checkpoint" step;
-run it after touching prompts or the engine table.
+run it after touching prompts or the engine table. A `web hits: N` line with
+`N > 0` confirms the web-search grounding stage reached real engines.
+
+### Refreshing web-search fixtures
+
+SERP markup drifts. When a `WEB_ENGINES` parser starts returning zero hits
+against the live engine, re-capture its fixture with the browser User-Agent
+from `pipeline/http.rs`, trim it to 2–3 results, drop it under
+`tests/fixtures/websearch/`, and adjust the CSS selectors in
+`core/websearch.rs` until the table-driven parse tests pass again:
+
+```sh
+curl -sS -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36" \
+"https://www.bing.com/search?q=rust+programming+language" -o /tmp/bing.html
+```
 
 ## Releasing
 

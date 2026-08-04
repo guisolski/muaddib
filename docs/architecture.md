@@ -12,6 +12,7 @@ flowchart TB
         TUI[tui/ — ratatui event loop and views]
         ENG[engines/ — CLI subprocess execution]
         VAL[pipeline/validate — HTTP link checks]
+        WEB[pipeline/websearch — HTTP search grounding]
         CFG[config_store — filesystem]
     end
     subgraph orchestration [Orchestration]
@@ -24,14 +25,17 @@ flowchart TB
         EXTRACT[core/extract — JSON extraction]
         ANSWER[core/answer — answer schema]
         CIT[core/citations — merge and renumber]
+        WEBT[core/websearch — WEB_ENGINES table and parsers]
         CONF[core/config — parse and clamp]
     end
     TUI --> PIPE
     PIPE --> ENG
     PIPE --> VAL
+    PIPE --> WEB
     PIPE --> core
     TUI --> core
     ENG --> core
+    WEB --> WEBT
     CFG --> CONF
 ```
 
@@ -56,6 +60,7 @@ logic needs to be touched:
 |---|---|---|
 | `MODES` | `core/mode.rs` | search modes, breadth, prompt instructions |
 | `ENGINES` | `engines/mod.rs` | engine binaries, argv, parse strategy |
+| `WEB_ENGINES` | `core/websearch.rs` | web/academic search engines, request shape, hit parsers |
 | `EXTRACTORS` | `core/extract.rs` | JSON extraction strategies, tried in order |
 | `KEYMAP` | `tui/keymap.rs` | keybindings, and the Ctrl+G help screen |
 | `CONFIG_FIELDS` | `tui/app.rs` | config modal fields |
@@ -106,8 +111,8 @@ src/
 ├── lib.rs            public modules (integration tests build against this)
 ├── config_store.rs   config file resolution and persistence (MUADDIB_CONFIG, XDG)
 ├── history_store.rs  search history file: append, load, clear (MUADDIB_HISTORY, XDG state)
-├── core/             pure: mode, plan, prompts, extract, answer, citations, config, history
+├── core/             pure: mode, plan, prompts, extract, answer, citations, config, history, websearch
 ├── engines/          EngineSpec table, Engine trait, CliEngine, output parsing
-├── pipeline/         SearchEvent protocol, stage orchestration, link validation
+├── pipeline/         SearchEvent protocol, stage orchestration, web-search grounding, link validation
 └── tui/              App state, reducer, keymap, theme, views, widgets
 ```
