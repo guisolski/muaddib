@@ -1,3 +1,5 @@
+#[cfg(any(feature = "link-validation", feature = "websearch"))]
+pub(crate) mod http;
 #[cfg(feature = "link-validation")]
 pub mod images;
 pub mod search;

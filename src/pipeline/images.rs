@@ -1,7 +1,7 @@
 use crate::core::answer::Answer;
 use crate::core::citations::image_urls;
 use crate::pipeline::SearchEvent;
-use crate::pipeline::validate::build_client;
+use crate::pipeline::http::build_client;
 use futures::stream::{self, StreamExt};
 use tokio::sync::mpsc::Sender;
 
