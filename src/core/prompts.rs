@@ -2,6 +2,7 @@ use crate::core::answer::{ANSWER_SCHEMA, FAST_ANSWER_SCHEMA};
 use crate::core::citations::MergedFindings;
 use crate::core::mode::ModeSpec;
 use crate::core::plan::{SearchPlan, SubQuery};
+use crate::core::websearch::{WebHit, hits_prompt_block};
 
 pub const EXPANSION_MARKER: &str = "MUADDIB:EXPAND";
 pub const SUB_SEARCH_MARKER: &str = "MUADDIB:SUBSEARCH";
@@ -72,11 +73,12 @@ fn cross_language_rule(mode: &ModeSpec) -> &'static str {
     }
 }
 
-pub fn sub_search_prompt(sub: &SubQuery, mode: &ModeSpec) -> String {
+pub fn sub_search_prompt(sub: &SubQuery, mode: &ModeSpec, hits: &[WebHit]) -> String {
     format!(
         "[task {SUB_SEARCH_MARKER}] Search the web for: {query}\n\
          Query language: {lang}.\n\
          Search mode: {label}. {instructions}\n\
+         {hits_block}\
          Collect concrete findings, each with the exact URL of the page that supports it.\n\
          Only report URLs of pages you actually consulted; never invent or guess a URL.\n\
          When a consulted page shows a relevant image (photo, chart, figure), add the \
@@ -88,6 +90,7 @@ pub fn sub_search_prompt(sub: &SubQuery, mode: &ModeSpec) -> String {
         lang = sub.lang,
         label = mode.label,
         instructions = mode.instructions,
+        hits_block = hits_prompt_block(hits),
     )
 }
 
@@ -193,7 +196,7 @@ mod tests {
             },
             Case {
                 name: "sub search",
-                prompt: sub_search_prompt(&sub, mode),
+                prompt: sub_search_prompt(&sub, mode, &[]),
                 marker: SUB_SEARCH_MARKER,
             },
             Case {
@@ -230,10 +233,49 @@ mod tests {
             lang: "en".to_string(),
             rationale: String::new(),
         };
-        let prompt = sub_search_prompt(&sub, Mode::General.spec());
+        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &[]);
         assert!(prompt.contains("graphene batteries"));
         assert!(prompt.contains("never invent or guess a URL"));
         assert!(prompt.contains("\"findings\""));
+    }
+
+    #[test]
+    fn sub_search_prompt_without_hits_matches_the_ungrounded_text() {
+        let sub = SubQuery {
+            query: "q".to_string(),
+            lang: "en".to_string(),
+            rationale: String::new(),
+        };
+        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &[]);
+        assert!(!prompt.contains("Candidate sources"));
+        assert!(prompt.contains("Search mode: General."));
+        assert!(prompt.contains(&format!(
+            "{}\nCollect concrete findings",
+            Mode::General.spec().instructions
+        )));
+    }
+
+    #[test]
+    fn sub_search_prompt_grounds_the_search_with_candidate_hits() {
+        let sub = SubQuery {
+            query: "rust language".to_string(),
+            lang: "en".to_string(),
+            rationale: String::new(),
+        };
+        let hits = [WebHit {
+            title: "Rust".to_string(),
+            url: "https://www.rust-lang.org/".to_string(),
+            snippet: "A language empowering everyone.".to_string(),
+            engine: "ddg",
+        }];
+        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &hits);
+        assert!(prompt.contains(SUB_SEARCH_MARKER));
+        assert!(prompt.contains("Candidate sources found by conventional search engines"));
+        assert!(prompt.contains("https://www.rust-lang.org/"));
+        assert!(prompt.contains("verify them before citing"));
+        let block_at = prompt.find("Candidate sources").unwrap();
+        let findings_at = prompt.find("Collect concrete findings").unwrap();
+        assert!(block_at < findings_at);
     }
 
     #[test]
@@ -272,7 +314,7 @@ mod tests {
             lang: "en".to_string(),
             rationale: String::new(),
         };
-        let prompt = sub_search_prompt(&sub, Mode::General.spec());
+        let prompt = sub_search_prompt(&sub, Mode::General.spec(), &[]);
         assert!(prompt.contains("image_url"));
         assert!(prompt.contains("direct URL of that image"));
     }

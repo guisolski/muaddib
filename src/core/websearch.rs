@@ -1,4 +1,8 @@
+use crate::core::citations::{
+    Finding, MergedFindings, allowed_urls, is_valid_source_url, normalize_url,
+};
 use crate::core::mode::Mode;
+use std::collections::BTreeSet;
 
 pub const SNIPPET_MAX_CHARS: usize = 300;
 
@@ -230,6 +234,57 @@ pub fn request_params(spec: &WebEngineSpec, query: &str, mailto: &str) -> Vec<(S
     let polite = (spec.supports_mailto && !mailto.trim().is_empty())
         .then(|| ("mailto".to_string(), mailto.trim().to_string()));
     base.chain(extras).chain(polite).collect()
+}
+
+pub fn hits_prompt_block(hits: &[WebHit]) -> String {
+    if hits.is_empty() {
+        return String::new();
+    }
+    let leads: String = hits
+        .iter()
+        .enumerate()
+        .map(|(index, hit)| hit_lead(index, hit))
+        .collect();
+    format!(
+        "Candidate sources found by conventional search engines, as leads:\n\
+         {leads}\
+         Open the most promising candidates first and verify them before citing; \
+         ignore irrelevant ones; you may also consult pages beyond this list.\n"
+    )
+}
+
+fn hit_lead(index: usize, hit: &WebHit) -> String {
+    let head = format!("{}. {} \u{2014} {}\n", index + 1, hit.title, hit.url);
+    if hit.snippet.is_empty() {
+        head
+    } else {
+        format!("{head}   {}\n", hit.snippet)
+    }
+}
+
+pub fn hits_as_findings(hits: &[WebHit], lang: &str) -> Vec<Finding> {
+    hits.iter()
+        .filter(|hit| is_valid_source_url(&hit.url))
+        .map(|hit| Finding {
+            claim: if hit.snippet.is_empty() {
+                hit.title.clone()
+            } else {
+                hit.snippet.clone()
+            },
+            source_title: hit.title.clone(),
+            source_url: hit.url.clone(),
+            lang: lang.to_string(),
+            image_url: String::new(),
+        })
+        .collect()
+}
+
+pub fn allowed_urls_with_hits(merged: &MergedFindings, hits: &[WebHit]) -> BTreeSet<String> {
+    let hit_urls = hits
+        .iter()
+        .filter(|hit| is_valid_source_url(&hit.url))
+        .map(|hit| normalize_url(&hit.url));
+    allowed_urls(merged).into_iter().chain(hit_urls).collect()
 }
 
 pub fn decode_ddg_redirect(href: &str) -> Option<String> {
@@ -853,6 +908,99 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    fn hit(title: &str, url: &str, snippet: &str) -> WebHit {
+        WebHit {
+            title: title.to_string(),
+            url: url.to_string(),
+            snippet: snippet.to_string(),
+            engine: "ddg",
+        }
+    }
+
+    #[test]
+    fn hits_prompt_block_is_empty_without_hits() {
+        assert_eq!(hits_prompt_block(&[]), "");
+    }
+
+    #[test]
+    fn hits_prompt_block_numbers_leads_and_asks_for_verification() {
+        let hits = [
+            hit(
+                "Rust",
+                "https://www.rust-lang.org/",
+                "A language empowering everyone.",
+            ),
+            hit("Wikipedia", "https://en.wikipedia.org/wiki/Rust", ""),
+        ];
+        let block = hits_prompt_block(&hits);
+        assert!(block.starts_with("Candidate sources found by conventional search engines"));
+        assert!(block.contains("1. Rust \u{2014} https://www.rust-lang.org/\n"));
+        assert!(block.contains("   A language empowering everyone.\n"));
+        assert!(block.contains("2. Wikipedia \u{2014} https://en.wikipedia.org/wiki/Rust\n"));
+        assert!(block.contains("verify them before citing"));
+        assert!(block.ends_with("beyond this list.\n"));
+    }
+
+    #[test]
+    fn hits_as_findings_uses_snippet_or_title_and_drops_invalid_urls() {
+        struct Case {
+            name: &'static str,
+            hit: WebHit,
+            want_claim: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                name: "snippet becomes the claim",
+                hit: hit("Title", "https://example.com/a", "The snippet."),
+                want_claim: Some("The snippet."),
+            },
+            Case {
+                name: "empty snippet falls back to the title",
+                hit: hit("Title", "https://example.com/b", ""),
+                want_claim: Some("Title"),
+            },
+            Case {
+                name: "invalid url is dropped",
+                hit: hit("Title", "ftp://example.com", "snippet"),
+                want_claim: None,
+            },
+        ];
+        for case in cases {
+            let findings = hits_as_findings(std::slice::from_ref(&case.hit), "en");
+            assert_eq!(
+                findings.first().map(|finding| finding.claim.as_str()),
+                case.want_claim,
+                "{}",
+                case.name
+            );
+            if let Some(finding) = findings.first() {
+                assert_eq!(finding.lang, "en", "{}", case.name);
+                assert_eq!(finding.source_title, case.hit.title, "{}", case.name);
+                assert!(finding.image_url.is_empty(), "{}", case.name);
+            }
+        }
+    }
+
+    #[test]
+    fn allowed_urls_with_hits_unions_findings_and_normalized_hit_urls() {
+        let merged = MergedFindings {
+            findings: hits_as_findings(&[hit("A", "https://a.example/page", "c")], "en"),
+            summaries: vec![],
+        };
+        let hits = [
+            hit("B", "https://B.Example/Path/", "s"),
+            hit("Bad", "not a url", "s"),
+        ];
+        let allowed = allowed_urls_with_hits(&merged, &hits);
+        assert_eq!(
+            allowed,
+            BTreeSet::from([
+                "https://a.example/page".to_string(),
+                "https://b.example/Path".to_string(),
+            ])
+        );
     }
 }
 

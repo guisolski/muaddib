@@ -216,7 +216,7 @@ async fn run_sub_query(
     timeout: Duration,
 ) -> Option<SubResult> {
     let job = EngineJob {
-        prompt: sub_search_prompt(sub, mode_spec),
+        prompt: sub_search_prompt(sub, mode_spec, &[]),
         schema: None,
         timeout,
     };
