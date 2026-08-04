@@ -8,6 +8,8 @@ pub const MAX_BREADTH: u8 = 8;
 pub const MODE_DEFAULT_BREADTH: u8 = 0;
 pub const MIN_FAST_TIMEOUT_SECS: u64 = 5;
 pub const MAX_FAST_TIMEOUT_SECS: u64 = 120;
+pub const MIN_WEB_HITS: u8 = 1;
+pub const MAX_WEB_HITS: u8 = 10;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -21,7 +23,39 @@ pub struct Config {
     pub animations: bool,
     pub engine_timeout_secs: u64,
     pub fast_timeout_secs: u64,
+    pub websearch: WebSearchConfig,
     pub engines: BTreeMap<String, EngineOverride>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WebSearchConfig {
+    pub enabled: bool,
+    pub merge_snippets: bool,
+    pub max_hits_per_query: u8,
+    pub engines: Vec<String>,
+    pub mailto: String,
+}
+
+impl Default for WebSearchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            merge_snippets: false,
+            max_hits_per_query: 5,
+            engines: Vec::new(),
+            mailto: String::new(),
+        }
+    }
+}
+
+impl WebSearchConfig {
+    pub fn disabled() -> Self {
+        Self {
+            enabled: false,
+            ..Self::default()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +84,7 @@ impl Default for Config {
             animations: true,
             engine_timeout_secs: 180,
             fast_timeout_secs: 45,
+            websearch: WebSearchConfig::default(),
             engines: BTreeMap::new(),
         }
     }
@@ -93,6 +128,10 @@ pub fn clamp_config(mut config: Config) -> Config {
     config.fast_timeout_secs = config
         .fast_timeout_secs
         .clamp(MIN_FAST_TIMEOUT_SECS, MAX_FAST_TIMEOUT_SECS);
+    config.websearch.max_hits_per_query = config
+        .websearch
+        .max_hits_per_query
+        .clamp(MIN_WEB_HITS, MAX_WEB_HITS);
     config
 }
 
@@ -258,6 +297,89 @@ mod tests {
     }
 
     #[test]
+    fn websearch_section_parses_defaults_and_clamps() {
+        struct Case {
+            name: &'static str,
+            input: &'static str,
+            want_enabled: bool,
+            want_merge: bool,
+            want_hits: u8,
+        }
+        let cases = [
+            Case {
+                name: "absent section uses defaults",
+                input: "",
+                want_enabled: true,
+                want_merge: false,
+                want_hits: 5,
+            },
+            Case {
+                name: "partial section keeps other defaults",
+                input: "[websearch]\nenabled = false",
+                want_enabled: false,
+                want_merge: false,
+                want_hits: 5,
+            },
+            Case {
+                name: "merge snippets opt in",
+                input: "[websearch]\nmerge_snippets = true",
+                want_enabled: true,
+                want_merge: true,
+                want_hits: 5,
+            },
+            Case {
+                name: "hits too high are clamped down",
+                input: "[websearch]\nmax_hits_per_query = 99",
+                want_enabled: true,
+                want_merge: false,
+                want_hits: MAX_WEB_HITS,
+            },
+            Case {
+                name: "hits zero is clamped up",
+                input: "[websearch]\nmax_hits_per_query = 0",
+                want_enabled: true,
+                want_merge: false,
+                want_hits: MIN_WEB_HITS,
+            },
+        ];
+        for case in cases {
+            let config = parse_config(case.input).unwrap();
+            assert_eq!(config.websearch.enabled, case.want_enabled, "{}", case.name);
+            assert_eq!(
+                config.websearch.merge_snippets, case.want_merge,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                config.websearch.max_hits_per_query, case.want_hits,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn websearch_engines_and_mailto_parse_from_toml() {
+        let text = "[websearch]\nengines = [\"ddg\", \"openalex\"]\nmailto = \"user@example.com\"";
+        let config = parse_config(text).unwrap();
+        assert_eq!(config.websearch.engines, vec!["ddg", "openalex"]);
+        assert_eq!(config.websearch.mailto, "user@example.com");
+    }
+
+    #[test]
+    fn websearch_disabled_helper_only_turns_the_feature_off() {
+        let disabled = WebSearchConfig::disabled();
+        assert!(!disabled.enabled);
+        assert_eq!(
+            WebSearchConfig {
+                enabled: true,
+                ..disabled
+            },
+            WebSearchConfig::default()
+        );
+    }
+
+    #[test]
     fn engine_fast_model_override_round_trips() {
         let text = "[engines.claude]\nmodel = \"opus\"\nfast_model = \"haiku\"";
         let config = parse_config(text).unwrap();
@@ -359,6 +481,13 @@ mod tests {
     fn config_serializes_and_parses_back_identically() {
         let config = Config {
             language: "fr".to_string(),
+            websearch: WebSearchConfig {
+                enabled: false,
+                merge_snippets: true,
+                max_hits_per_query: 7,
+                engines: vec!["ddg".to_string(), "openalex".to_string()],
+                mailto: "user@example.com".to_string(),
+            },
             engines: BTreeMap::from([(
                 "claude".to_string(),
                 EngineOverride {
