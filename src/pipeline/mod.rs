@@ -5,6 +5,7 @@ pub mod images;
 pub mod search;
 #[cfg(feature = "link-validation")]
 pub mod validate;
+pub mod websearch;
 
 use crate::core::answer::Answer;
 pub use crate::core::citations::LinkStatus;
@@ -13,6 +14,7 @@ use crate::core::plan::SearchPlan;
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchEvent {
     PlanReady(SearchPlan),
+    WebHits { count: usize },
     SubQueryStarted { idx: usize },
     SubQueryFinished { idx: usize, ok: bool },
     SynthesisStarted,

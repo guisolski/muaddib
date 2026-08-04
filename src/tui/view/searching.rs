@@ -45,6 +45,9 @@ fn panel_lines(app: &App, include_mascot: bool, width: usize) -> Vec<Line<'stati
     lines.push(Line::from(header));
     lines.push(Line::default());
     lines.extend(sub_query_lines(app));
+    if let Some(count) = app.search.web_hits {
+        lines.push(Line::styled(format!("web hits: {count}"), theme::dim()));
+    }
     if app.search.synthesizing {
         lines.push(Line::default());
         lines.push(Line::from(vec![

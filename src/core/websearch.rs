@@ -1,7 +1,9 @@
 use crate::core::citations::{
-    Finding, MergedFindings, allowed_urls, is_valid_source_url, normalize_url,
+    Finding, MergedFindings, SubResult, SubSearchResponse, allowed_urls, is_valid_source_url,
+    normalize_url,
 };
 use crate::core::mode::Mode;
+use crate::core::plan::SubQuery;
 use std::collections::BTreeSet;
 
 pub const SNIPPET_MAX_CHARS: usize = 300;
@@ -236,6 +238,14 @@ pub fn request_params(spec: &WebEngineSpec, query: &str, mailto: &str) -> Vec<(S
     base.chain(extras).chain(polite).collect()
 }
 
+pub fn encoded_params(spec: &WebEngineSpec, query: &str, mailto: &str) -> String {
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    for (key, value) in request_params(spec, query, mailto) {
+        serializer.append_pair(&key, &value);
+    }
+    serializer.finish()
+}
+
 pub fn hits_prompt_block(hits: &[WebHit]) -> String {
     if hits.is_empty() {
         return String::new();
@@ -275,6 +285,21 @@ pub fn hits_as_findings(hits: &[WebHit], lang: &str) -> Vec<Finding> {
             source_url: hit.url.clone(),
             lang: lang.to_string(),
             image_url: String::new(),
+        })
+        .collect()
+}
+
+pub fn snippet_sub_results(sub_queries: &[SubQuery], hits: &[Vec<WebHit>]) -> Vec<SubResult> {
+    sub_queries
+        .iter()
+        .zip(hits)
+        .map(|(sub, query_hits)| SubResult {
+            query: sub.query.clone(),
+            lang: sub.lang.clone(),
+            response: SubSearchResponse {
+                summary: String::new(),
+                findings: hits_as_findings(query_hits, &sub.lang),
+            },
         })
         .collect()
 }
@@ -910,6 +935,39 @@ mod tests {
         }
     }
 
+    #[test]
+    fn encoded_params_percent_encodes_the_query() {
+        struct Case {
+            name: &'static str,
+            engine: &'static str,
+            query: &'static str,
+            want: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "spaces become plus signs",
+                engine: "bing",
+                query: "rust programming language",
+                want: "q=rust+programming+language",
+            },
+            Case {
+                name: "reserved characters are escaped",
+                engine: "mojeek",
+                query: "a&b=c",
+                want: "q=a%26b%3Dc",
+            },
+        ];
+        for case in cases {
+            let spec = engine_by_name(case.engine).unwrap();
+            assert_eq!(
+                encoded_params(spec, case.query, ""),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
+    }
+
     fn hit(title: &str, url: &str, snippet: &str) -> WebHit {
         WebHit {
             title: title.to_string(),
@@ -981,6 +1039,33 @@ mod tests {
                 assert!(finding.image_url.is_empty(), "{}", case.name);
             }
         }
+    }
+
+    #[test]
+    fn snippet_sub_results_align_hits_with_their_sub_queries() {
+        let sub_queries = [
+            SubQuery {
+                query: "first".to_string(),
+                lang: "en".to_string(),
+                rationale: String::new(),
+            },
+            SubQuery {
+                query: "second".to_string(),
+                lang: "pt-BR".to_string(),
+                rationale: String::new(),
+            },
+        ];
+        let hits = [
+            vec![hit("A", "https://a.example/page", "snippet a")],
+            Vec::new(),
+        ];
+        let results = snippet_sub_results(&sub_queries, &hits);
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].query, "first");
+        assert!(results[0].response.summary.is_empty());
+        assert_eq!(results[0].response.findings[0].claim, "snippet a");
+        assert_eq!(results[0].response.findings[0].lang, "en");
+        assert!(results[1].response.findings.is_empty());
     }
 
     #[test]

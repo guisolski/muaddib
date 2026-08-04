@@ -28,6 +28,9 @@ tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "process"
 toml = "1.1.4"
 tui-input = "0.15.3"
 
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["test-util"] }
+
 [features]
 default = ["link-validation", "websearch"]
 link-validation = ["dep:reqwest"]

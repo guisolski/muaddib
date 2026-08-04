@@ -1,17 +1,18 @@
 use crate::core::answer::{ANSWER_SCHEMA, Answer, FAST_ANSWER_SCHEMA, parse_answer};
 use crate::core::citations::{
-    MergedFindings, SubResult, allowed_image_urls, allowed_urls, eject_unknown_images,
-    merge_sub_results, parse_sub_response, renumber_sources, self_declared_urls,
-    strip_image_blocks,
+    MergedFindings, SubResult, allowed_image_urls, eject_unknown_images, merge_sub_results,
+    parse_sub_response, renumber_sources, self_declared_urls, strip_image_blocks,
 };
-use crate::core::config::Config;
+use crate::core::config::{Config, WebSearchConfig};
 use crate::core::extract::extract_json;
 use crate::core::mode::{Mode, ModeSpec};
 use crate::core::plan::{
     SearchPlan, SubQuery, effective_breadth, literal_plan, plan_from_expansion,
 };
 use crate::core::prompts::{expansion_prompt, fast_prompt, sub_search_prompt, synthesis_prompt};
+use crate::core::websearch::{WebHit, allowed_urls_with_hits, snippet_sub_results};
 use crate::engines::{Engine, EngineJob};
+use crate::pipeline::websearch::{WebFetcher, default_fetcher, websearch_stage};
 use crate::pipeline::{SearchEvent, SearchHandle};
 use futures::stream::{self, StreamExt};
 use std::sync::Arc;
@@ -34,6 +35,7 @@ pub struct SearchRequest {
     pub fast_timeout: Duration,
     pub validate_links: bool,
     pub fetch_images: bool,
+    pub websearch: WebSearchConfig,
 }
 
 impl SearchRequest {
@@ -49,22 +51,36 @@ impl SearchRequest {
             fast_timeout: Duration::from_secs(config.fast_timeout_secs),
             validate_links: config.validate_links,
             fetch_images: config.images && !fast,
+            websearch: if fast {
+                WebSearchConfig::disabled()
+            } else {
+                config.websearch.clone()
+            },
         }
     }
 }
 
 pub fn spawn_search(engine: Arc<dyn Engine>, request: SearchRequest) -> SearchHandle {
+    spawn_search_with_fetcher(engine, default_fetcher(), request)
+}
+
+pub fn spawn_search_with_fetcher(
+    engine: Arc<dyn Engine>,
+    fetcher: Arc<dyn WebFetcher>,
+    request: SearchRequest,
+) -> SearchHandle {
     let (tx, events) = mpsc::channel(EVENT_BUFFER);
-    let task = tokio::spawn(run_search(engine, request, tx));
+    let task = tokio::spawn(run_search(engine, fetcher, request, tx));
     SearchHandle::new(events, task)
 }
 
 pub async fn run_search(
     engine: Arc<dyn Engine>,
+    fetcher: Arc<dyn WebFetcher>,
     request: SearchRequest,
     tx: mpsc::Sender<SearchEvent>,
 ) {
-    match run_stages(engine.as_ref(), &request, &tx).await {
+    match run_stages(engine.as_ref(), fetcher.as_ref(), &request, &tx).await {
         Ok(()) => send(&tx, SearchEvent::Completed).await,
         Err(message) => send(&tx, SearchEvent::Failed(message)).await,
     }
@@ -76,6 +92,7 @@ async fn send(tx: &mpsc::Sender<SearchEvent>, event: SearchEvent) {
 
 async fn run_stages(
     engine: &dyn Engine,
+    fetcher: &dyn WebFetcher,
     request: &SearchRequest,
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Result<(), String> {
@@ -84,20 +101,40 @@ async fn run_stages(
     }
     let plan = expansion_stage(engine, request).await;
     send(tx, SearchEvent::PlanReady(plan.clone())).await;
-    let sub_results = fanout_stage(engine, &plan, request, tx).await;
+    let hits = websearch_stage(fetcher, &plan, &request.websearch, tx).await;
+    let sub_results = fanout_stage(engine, &plan, &hits, request, tx).await;
     if sub_results.is_empty() {
         return Err("every sub-query failed; nothing to synthesize".to_string());
     }
-    let merged = merge_sub_results(&sub_results);
+    let merged = merged_findings(&sub_results, &plan, &hits, request);
     if merged.findings.is_empty() {
         return Err("the searches produced no findings with usable sources".to_string());
     }
     send(tx, SearchEvent::SynthesisStarted).await;
-    let answer = synthesis_stage(engine, &plan, &merged, request).await?;
+    let all_hits: Vec<WebHit> = hits.into_iter().flatten().collect();
+    let answer = synthesis_stage(engine, &plan, &merged, &all_hits, request).await?;
     send(tx, SearchEvent::AnswerReady(Box::new(answer.clone()))).await;
     link_validation_stage(&answer, request, tx).await;
     image_fetch_stage(&answer, request, tx).await;
     Ok(())
+}
+
+fn merged_findings(
+    sub_results: &[SubResult],
+    plan: &SearchPlan,
+    hits: &[Vec<WebHit>],
+    request: &SearchRequest,
+) -> MergedFindings {
+    if request.websearch.merge_snippets {
+        let combined: Vec<SubResult> = sub_results
+            .iter()
+            .cloned()
+            .chain(snippet_sub_results(&plan.sub_queries, hits))
+            .collect();
+        merge_sub_results(&combined)
+    } else {
+        merge_sub_results(sub_results)
+    }
 }
 
 async fn run_fast_stages(
@@ -175,6 +212,7 @@ async fn expansion_stage(engine: &dyn Engine, request: &SearchRequest) -> Search
 async fn fanout_stage(
     engine: &dyn Engine,
     plan: &SearchPlan,
+    hits: &[Vec<WebHit>],
     request: &SearchRequest,
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Vec<SubResult> {
@@ -183,7 +221,10 @@ async fn fanout_stage(
         .sub_queries
         .iter()
         .enumerate()
-        .map(|(idx, sub)| track_sub_query(engine, idx, sub, mode_spec, request, tx))
+        .map(|(idx, sub)| {
+            let sub_hits = hits.get(idx).map_or(&[][..], Vec::as_slice);
+            track_sub_query(engine, idx, sub, sub_hits, mode_spec, request, tx)
+        })
         .collect();
     stream::iter(sub_query_futures)
         .buffer_unordered(request.max_parallel.max(1))
@@ -198,12 +239,13 @@ async fn track_sub_query(
     engine: &dyn Engine,
     idx: usize,
     sub: &SubQuery,
+    hits: &[WebHit],
     mode_spec: &ModeSpec,
     request: &SearchRequest,
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Option<SubResult> {
     send(tx, SearchEvent::SubQueryStarted { idx }).await;
-    let result = run_sub_query(engine, sub, mode_spec, request.engine_timeout).await;
+    let result = run_sub_query(engine, sub, hits, mode_spec, request.engine_timeout).await;
     let ok = result.is_some();
     send(tx, SearchEvent::SubQueryFinished { idx, ok }).await;
     result
@@ -212,11 +254,12 @@ async fn track_sub_query(
 async fn run_sub_query(
     engine: &dyn Engine,
     sub: &SubQuery,
+    hits: &[WebHit],
     mode_spec: &ModeSpec,
     timeout: Duration,
 ) -> Option<SubResult> {
     let job = EngineJob {
-        prompt: sub_search_prompt(sub, mode_spec, &[]),
+        prompt: sub_search_prompt(sub, mode_spec, hits),
         schema: None,
         timeout,
     };
@@ -234,6 +277,7 @@ async fn synthesis_stage(
     engine: &dyn Engine,
     plan: &SearchPlan,
     merged: &MergedFindings,
+    hits: &[WebHit],
     request: &SearchRequest,
 ) -> Result<Answer, String> {
     let inline_schema = !engine.supports_json_schema();
@@ -251,7 +295,10 @@ async fn synthesis_stage(
     let answer = parse_answer(value)
         .map_err(|error| format!("synthesis JSON did not match the answer schema: {error}"))?;
     let answer = eject_unknown_images(answer, &allowed_image_urls(merged));
-    Ok(renumber_sources(answer, &allowed_urls(merged)))
+    Ok(renumber_sources(
+        answer,
+        &allowed_urls_with_hits(merged, hits),
+    ))
 }
 
 #[cfg(feature = "link-validation")]
@@ -298,13 +345,17 @@ mod tests {
     use crate::core::prompts::{
         EXPANSION_MARKER, FAST_MARKER, SUB_SEARCH_MARKER, SYNTHESIS_MARKER,
     };
+    use crate::core::websearch::WebHit;
     use crate::engines::{BoxedEngineFuture, EngineError, EngineOutput};
+    use crate::pipeline::websearch::{BoxedHitsFuture, NoopWebFetcher};
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct FakeEngine {
         fail_markers: Vec<&'static str>,
         simple_expansion: bool,
         calls: AtomicUsize,
+        prompts: Mutex<Vec<String>>,
     }
 
     impl FakeEngine {
@@ -313,23 +364,32 @@ mod tests {
                 fail_markers: vec![],
                 simple_expansion: false,
                 calls: AtomicUsize::new(0),
+                prompts: Mutex::new(Vec::new()),
             }
         }
 
         fn failing_on(markers: &[&'static str]) -> Self {
             Self {
                 fail_markers: markers.to_vec(),
-                simple_expansion: false,
-                calls: AtomicUsize::new(0),
+                ..Self::reliable()
             }
         }
 
         fn rating_simple() -> Self {
             Self {
-                fail_markers: vec![],
                 simple_expansion: true,
-                calls: AtomicUsize::new(0),
+                ..Self::reliable()
             }
+        }
+
+        fn prompts_with(&self, marker: &str) -> Vec<String> {
+            self.prompts
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|prompt| prompt.contains(marker))
+                .cloned()
+                .collect()
         }
 
         fn canned_response(&self, marker: &str) -> String {
@@ -406,6 +466,7 @@ mod tests {
         fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a> {
             Box::pin(async move {
                 self.calls.fetch_add(1, Ordering::SeqCst);
+                self.prompts.lock().unwrap().push(job.prompt.clone());
                 let marker = marker_of(&job.prompt);
                 if self.fail_markers.contains(&marker) {
                     return Err(EngineError::Reported(format!("forced failure: {marker}")));
@@ -414,6 +475,44 @@ mod tests {
                     text: self.canned_response(marker),
                 })
             })
+        }
+    }
+
+    struct FakeWebFetcher {
+        canned: Vec<WebHit>,
+        calls: AtomicUsize,
+    }
+
+    impl FakeWebFetcher {
+        fn returning(canned: Vec<WebHit>) -> Self {
+            Self {
+                canned,
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl crate::pipeline::websearch::WebFetcher for FakeWebFetcher {
+        fn search<'a>(
+            &'a self,
+            _spec: &'static crate::core::websearch::WebEngineSpec,
+            _query: &'a str,
+            _mailto: &'a str,
+            max_hits: usize,
+        ) -> BoxedHitsFuture<'a> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.canned.iter().take(max_hits).cloned().collect()
+            })
+        }
+    }
+
+    fn web_hit(url: &str, snippet: &str) -> WebHit {
+        WebHit {
+            title: "Hit title".to_string(),
+            url: url.to_string(),
+            snippet: snippet.to_string(),
+            engine: "ddg",
         }
     }
 
@@ -429,6 +528,7 @@ mod tests {
             fast_timeout: Duration::from_secs(5),
             validate_links: false,
             fetch_images: false,
+            websearch: WebSearchConfig::disabled(),
         }
     }
 
@@ -439,18 +539,37 @@ mod tests {
         }
     }
 
+    fn websearch_request(merge_snippets: bool) -> SearchRequest {
+        SearchRequest {
+            websearch: WebSearchConfig {
+                merge_snippets,
+                ..WebSearchConfig::default()
+            },
+            ..request()
+        }
+    }
+
     async fn collect_events(engine: FakeEngine) -> Vec<SearchEvent> {
         drain(engine, request()).await.1
     }
 
     async fn drain(engine: FakeEngine, request: SearchRequest) -> (usize, Vec<SearchEvent>) {
         let engine = Arc::new(engine);
-        let mut handle = spawn_search(engine.clone(), request);
+        let events = drain_with(engine.clone(), Arc::new(NoopWebFetcher), request).await;
+        (engine.calls.load(Ordering::SeqCst), events)
+    }
+
+    async fn drain_with(
+        engine: Arc<FakeEngine>,
+        fetcher: Arc<dyn crate::pipeline::websearch::WebFetcher>,
+        request: SearchRequest,
+    ) -> Vec<SearchEvent> {
+        let mut handle = spawn_search_with_fetcher(engine, fetcher, request);
         let mut events = Vec::new();
         while let Some(event) = handle.events.recv().await {
             events.push(event);
         }
-        (engine.calls.load(Ordering::SeqCst), events)
+        events
     }
 
     fn answer_in(events: &[SearchEvent]) -> &Answer {
@@ -648,6 +767,101 @@ mod tests {
     async fn standard_mode_still_makes_three_engine_calls_for_a_simple_rating() {
         let (calls, _) = drain(FakeEngine::rating_simple(), request()).await;
         assert_eq!(calls, 3);
+    }
+
+    #[tokio::test]
+    async fn web_hits_ground_every_sub_search_prompt() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let fetcher = Arc::new(FakeWebFetcher::returning(vec![web_hit(
+            "https://hit.example/page",
+            "A grounding snippet.",
+        )]));
+        let events = drain_with(engine.clone(), fetcher, websearch_request(false)).await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::WebHits { count: 3 }))
+        );
+        let sub_prompts = engine.prompts_with(SUB_SEARCH_MARKER);
+        assert_eq!(sub_prompts.len(), 3);
+        for prompt in &sub_prompts {
+            assert!(prompt.contains("Candidate sources"));
+            assert!(prompt.contains("https://hit.example/page"));
+        }
+    }
+
+    #[tokio::test]
+    async fn hit_urls_extend_the_synthesis_allowlist() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let fetcher = Arc::new(FakeWebFetcher::returning(vec![web_hit(
+            "https://invented.example/x",
+            "Actually a real search result.",
+        )]));
+        let events = drain_with(engine, fetcher, websearch_request(false)).await;
+        let urls: Vec<&str> = answer_in(&events)
+            .sources
+            .iter()
+            .map(|source| source.url.as_str())
+            .collect();
+        assert!(urls.contains(&"https://invented.example/x"));
+    }
+
+    #[tokio::test]
+    async fn merge_snippets_feeds_hits_into_the_synthesis_findings() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let fetcher = Arc::new(FakeWebFetcher::returning(vec![web_hit(
+            "https://hit.example/page",
+            "A snippet worth citing.",
+        )]));
+        drain_with(engine.clone(), fetcher, websearch_request(true)).await;
+        let synthesis_prompts = engine.prompts_with(SYNTHESIS_MARKER);
+        assert_eq!(synthesis_prompts.len(), 1);
+        assert!(synthesis_prompts[0].contains("https://hit.example/page"));
+        assert!(synthesis_prompts[0].contains("A snippet worth citing."));
+    }
+
+    #[tokio::test]
+    async fn empty_web_hits_degrade_to_the_ungrounded_flow() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let fetcher = Arc::new(FakeWebFetcher::returning(Vec::new()));
+        let events = drain_with(engine.clone(), fetcher, websearch_request(false)).await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        let urls: Vec<&str> = answer_in(&events)
+            .sources
+            .iter()
+            .map(|source| source.url.as_str())
+            .collect();
+        assert_eq!(urls, vec!["https://one.example/a", "https://two.example/b"]);
+        for prompt in engine.prompts_with(SUB_SEARCH_MARKER) {
+            assert!(!prompt.contains("Candidate sources"));
+        }
+    }
+
+    #[tokio::test]
+    async fn disabled_websearch_never_calls_the_fetcher() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let fetcher = Arc::new(FakeWebFetcher::returning(vec![web_hit(
+            "https://hit.example/page",
+            "snippet",
+        )]));
+        let events = drain_with(engine, fetcher.clone(), request()).await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0);
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::WebHits { .. }))
+        );
+    }
+
+    #[test]
+    fn fast_request_from_config_disables_websearch() {
+        let config = Config::default();
+        let fast = SearchRequest::from_config("q".to_string(), Mode::General, true, &config);
+        let standard = SearchRequest::from_config("q".to_string(), Mode::General, false, &config);
+        assert!(!fast.websearch.enabled);
+        assert!(standard.websearch.enabled);
     }
 
     #[test]

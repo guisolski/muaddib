@@ -175,6 +175,7 @@ fn report_progress(event: &SearchEvent) {
                 eprintln!("  [{}] {}", sub.lang, sub.query);
             }
         }
+        SearchEvent::WebHits { count } => eprintln!("muaddib: web hits: {count}"),
         SearchEvent::SubQueryFinished { idx, ok } => {
             let outcome = if *ok { "done" } else { "failed" };
             eprintln!("muaddib: sub-query {} {outcome}", idx + 1);

@@ -36,6 +36,7 @@ pub enum SearchOutcome {
 #[derive(Default)]
 pub struct SearchState {
     pub plan: Option<SearchPlan>,
+    pub web_hits: Option<usize>,
     pub progress: Vec<SubQueryState>,
     pub synthesizing: bool,
     pub started_at: Option<Instant>,
@@ -51,6 +52,7 @@ pub struct SearchState {
 impl SearchState {
     pub fn begin(&mut self, now: Instant) {
         self.plan = None;
+        self.web_hits = None;
         self.progress.clear();
         self.synthesizing = false;
         self.answer = None;
@@ -89,6 +91,10 @@ impl SearchState {
             SearchEvent::PlanReady(plan) => {
                 self.progress = vec![SubQueryState::Pending; plan.sub_queries.len()];
                 self.plan = Some(plan);
+                SearchOutcome::None
+            }
+            SearchEvent::WebHits { count } => {
+                self.web_hits = Some(count);
                 SearchOutcome::None
             }
             SearchEvent::SubQueryStarted { idx } => {
@@ -232,6 +238,16 @@ mod tests {
         assert_eq!(outcome, SearchOutcome::None);
         assert_eq!(state.progress, vec![SubQueryState::Pending; 2]);
         assert!(state.plan.is_some());
+    }
+
+    #[test]
+    fn apply_event_stores_the_web_hit_count() {
+        let mut state = SearchState::default();
+        let outcome = state.apply_event(SearchEvent::WebHits { count: 7 }, 0);
+        assert_eq!(outcome, SearchOutcome::None);
+        assert_eq!(state.web_hits, Some(7));
+        state.begin(Instant::now());
+        assert_eq!(state.web_hits, None);
     }
 
     #[test]
