@@ -2,7 +2,9 @@ use crate::core::citations::normalize_url;
 use crate::core::config::WebSearchConfig;
 use crate::core::plan::SearchPlan;
 use crate::core::rank::{pool_budget, rank_hits};
-use crate::core::websearch::{WebEngineSpec, WebHit, engines_for_mode, fallback_engine};
+use crate::core::websearch::{
+    WebEngineSpec, WebHit, engines_for_mode, fallback_engine, resolve_url,
+};
 use crate::pipeline::SearchEvent;
 use futures::stream::{self, StreamExt};
 use std::collections::BTreeSet;
@@ -28,6 +30,7 @@ pub trait WebFetcher: Send + Sync {
     fn search<'a>(
         &'a self,
         spec: &'static WebEngineSpec,
+        base_url: &'a str,
         query: &'a str,
         mailto: &'a str,
         max_hits: usize,
@@ -44,6 +47,7 @@ impl WebFetcher for NoopWebFetcher {
     fn search<'a>(
         &'a self,
         _spec: &'static WebEngineSpec,
+        _base_url: &'a str,
         _query: &'a str,
         _mailto: &'a str,
         _max_hits: usize,
@@ -78,13 +82,14 @@ impl WebFetcher for HttpWebFetcher {
     fn search<'a>(
         &'a self,
         spec: &'static WebEngineSpec,
+        base_url: &'a str,
         query: &'a str,
         mailto: &'a str,
         max_hits: usize,
     ) -> BoxedHitsFuture<'a> {
         Box::pin(async move {
             match &self.client {
-                Some(client) => fetch_hits(client, spec, query, mailto, max_hits)
+                Some(client) => fetch_hits(client, spec, base_url, query, mailto, max_hits)
                     .await
                     .unwrap_or_default(),
                 None => Vec::new(),
@@ -137,6 +142,7 @@ async fn fetch_page_body(client: &reqwest::Client, url: &str) -> Option<String> 
 async fn fetch_hits(
     client: &reqwest::Client,
     spec: &'static WebEngineSpec,
+    base_url: &str,
     query: &str,
     mailto: &str,
     max_hits: usize,
@@ -144,9 +150,9 @@ async fn fetch_hits(
     use crate::core::websearch::{RequestShape, WebCategory, encoded_params, parse_hits};
     let encoded = encoded_params(spec, query, mailto);
     let request = match spec.shape {
-        RequestShape::Get => client.get(format!("{}?{encoded}", spec.url)),
+        RequestShape::Get => client.get(format!("{base_url}?{encoded}")),
         RequestShape::PostForm => client
-            .post(spec.url)
+            .post(base_url)
             .header(
                 reqwest::header::CONTENT_TYPE,
                 "application/x-www-form-urlencoded",
@@ -179,7 +185,7 @@ pub async fn websearch_stage(
     tx: &Sender<SearchEvent>,
 ) -> Vec<Vec<WebHit>> {
     let engines = if config.enabled {
-        engines_for_mode(plan.mode, &config.engines)
+        engines_for_mode(plan.mode, config)
     } else {
         Vec::new()
     };
@@ -231,9 +237,12 @@ async fn query_hits(
         if remaining == 0 || time_left.is_zero() {
             break;
         }
+        let Some(base_url) = resolve_url(spec, config) else {
+            continue;
+        };
         let engine_hits = tokio::time::timeout(
             time_left,
-            engine_hits_with_fallback(fetcher, spec, query, &config.mailto, remaining),
+            engine_hits_with_fallback(fetcher, spec, &base_url, query, &config.mailto, remaining),
         )
         .await
         .unwrap_or_default();
@@ -250,15 +259,20 @@ async fn query_hits(
 async fn engine_hits_with_fallback(
     fetcher: &dyn WebFetcher,
     spec: &'static WebEngineSpec,
+    base_url: &str,
     query: &str,
     mailto: &str,
     max_hits: usize,
 ) -> Vec<WebHit> {
-    let primary = fetcher.search(spec, query, mailto, max_hits).await;
+    let primary = fetcher
+        .search(spec, base_url, query, mailto, max_hits)
+        .await;
     if primary.is_empty()
         && let Some(fallback) = fallback_engine(spec)
     {
-        return fetcher.search(fallback, query, mailto, max_hits).await;
+        return fetcher
+            .search(fallback, fallback.url, query, mailto, max_hits)
+            .await;
     }
     primary
 }
@@ -296,6 +310,7 @@ mod tests {
         fn search<'a>(
             &'a self,
             spec: &'static WebEngineSpec,
+            _base_url: &'a str,
             _query: &'a str,
             _mailto: &'a str,
             max_hits: usize,

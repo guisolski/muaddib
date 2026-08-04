@@ -72,7 +72,9 @@ enabled = true              # query conventional engines before the AI fan-out; 
 merge_snippets = false      # also merge hit snippets into the findings, not just the prompts
 max_hits_per_query = 5      # deduplicated hits per sub-query, clamped to 1..=10
 engines = []                # empty = mode defaults; else an allowlist of engine names
-                            # (ddg, ddg-lite, bing, mojeek, google, openalex, crossref, s2)
+                            # (searxng, ddg, ddg-lite, bing, mojeek, google, openalex, crossref, s2)
+searxng_url = ""            # base URL of your own SearXNG instance; empty = off
+                            # when set, searxng leads the mode's default engine list
 mailto = ""                 # optional email for the OpenAlex/Crossref polite pools
 ground_modes = ["scientific", "deep"]
                             # modes whose top hits get their page content fetched
@@ -88,6 +90,26 @@ fast_model = "haiku"        # model used in fast mode; falls back to the engine'
 
 Unknown keys are tolerated (forward compatibility). Out-of-range numbers are
 clamped, not rejected.
+
+### SearXNG
+
+`searxng_url` is the one key that both enables and configures an engine — there is no
+separate on/off switch. Point it at your own instance and it joins the waterfall ahead
+of the scraped engines, which is worth doing: SearXNG returns JSON, so it never breaks
+on SERP markup drift and never trips a rate limit meant for browsers.
+
+The instance must expose the JSON API, which is **not** the default:
+
+```yaml
+# settings.yml on your SearXNG instance
+search:
+  formats:
+    - html
+    - json
+```
+
+Without it the endpoint answers `403`, which muaddib treats like any other engine
+failure — zero hits, search continues. Public instances usually have JSON disabled.
 
 ## Precedence
 

@@ -19,6 +19,7 @@ pub enum WebEngineId {
     OpenAlex,
     Crossref,
     SemanticScholar,
+    SearxNg,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +44,7 @@ pub enum HitParser {
     OpenAlexJson,
     CrossrefJson,
     SemanticScholarJson,
+    SearxNgJson,
 }
 
 #[derive(Debug)]
@@ -55,6 +57,7 @@ pub struct WebEngineSpec {
     pub query_param: &'static str,
     pub extra_params: &'static [(&'static str, &'static str)],
     pub supports_mailto: bool,
+    pub url_from_config: bool,
     pub parser: HitParser,
     pub fallback: Option<WebEngineId>,
 }
@@ -77,6 +80,7 @@ pub const WEB_ENGINES: &[WebEngineSpec] = &[
         query_param: "q",
         extra_params: &[("b", "")],
         supports_mailto: false,
+        url_from_config: false,
         parser: HitParser::DdgHtml,
         fallback: Some(WebEngineId::DuckDuckGoLite),
     },
@@ -89,6 +93,7 @@ pub const WEB_ENGINES: &[WebEngineSpec] = &[
         query_param: "q",
         extra_params: &[],
         supports_mailto: false,
+        url_from_config: false,
         parser: HitParser::DdgLite,
         fallback: None,
     },
@@ -101,6 +106,7 @@ pub const WEB_ENGINES: &[WebEngineSpec] = &[
         query_param: "q",
         extra_params: &[],
         supports_mailto: false,
+        url_from_config: false,
         parser: HitParser::BingHtml,
         fallback: None,
     },
@@ -113,6 +119,7 @@ pub const WEB_ENGINES: &[WebEngineSpec] = &[
         query_param: "q",
         extra_params: &[],
         supports_mailto: false,
+        url_from_config: false,
         parser: HitParser::MojeekHtml,
         fallback: None,
     },
@@ -125,6 +132,7 @@ pub const WEB_ENGINES: &[WebEngineSpec] = &[
         query_param: "q",
         extra_params: &[("num", "10"), ("hl", "en")],
         supports_mailto: false,
+        url_from_config: false,
         parser: HitParser::GoogleHtml,
         fallback: None,
     },
@@ -137,6 +145,7 @@ pub const WEB_ENGINES: &[WebEngineSpec] = &[
         query_param: "search",
         extra_params: &[("per-page", "10")],
         supports_mailto: true,
+        url_from_config: false,
         parser: HitParser::OpenAlexJson,
         fallback: None,
     },
@@ -149,6 +158,7 @@ pub const WEB_ENGINES: &[WebEngineSpec] = &[
         query_param: "query",
         extra_params: &[("rows", "10")],
         supports_mailto: true,
+        url_from_config: false,
         parser: HitParser::CrossrefJson,
         fallback: None,
     },
@@ -164,7 +174,21 @@ pub const WEB_ENGINES: &[WebEngineSpec] = &[
             ("fields", "title,abstract,url,year,venue,externalIds"),
         ],
         supports_mailto: false,
+        url_from_config: false,
         parser: HitParser::SemanticScholarJson,
+        fallback: None,
+    },
+    WebEngineSpec {
+        id: WebEngineId::SearxNg,
+        name: "searxng",
+        category: WebCategory::Web,
+        shape: RequestShape::Get,
+        url: "",
+        query_param: "q",
+        extra_params: &[("format", "json")],
+        supports_mailto: false,
+        url_from_config: true,
+        parser: HitParser::SearxNgJson,
         fallback: None,
     },
 ];
@@ -209,15 +233,34 @@ pub fn fallback_engine(spec: &WebEngineSpec) -> Option<&'static WebEngineSpec> {
     spec.fallback.and_then(engine_by_id)
 }
 
-pub fn engines_for_mode(mode: Mode, allowlist: &[String]) -> Vec<&'static WebEngineSpec> {
-    if allowlist.is_empty() {
-        default_engines_for_mode(mode)
+pub fn engines_for_mode(mode: Mode, config: &WebSearchConfig) -> Vec<&'static WebEngineSpec> {
+    if config.engines.is_empty() {
+        with_configured_searxng(default_engines_for_mode(mode), config)
     } else {
-        allowlist
+        config
+            .engines
             .iter()
             .filter_map(|name| engine_by_name(name))
             .collect()
     }
+}
+
+fn with_configured_searxng(
+    defaults: Vec<&'static WebEngineSpec>,
+    config: &WebSearchConfig,
+) -> Vec<&'static WebEngineSpec> {
+    let searxng = engine_by_id(WebEngineId::SearxNg)
+        .filter(|spec| resolve_url(spec, config).is_some())
+        .filter(|spec| !defaults.iter().any(|other| other.id == spec.id));
+    searxng.into_iter().chain(defaults).collect()
+}
+
+pub fn resolve_url(spec: &WebEngineSpec, config: &WebSearchConfig) -> Option<String> {
+    if !spec.url_from_config {
+        return Some(spec.url.to_string());
+    }
+    let base = config.searxng_url.trim().trim_end_matches('/');
+    (!base.is_empty()).then(|| format!("{base}/search"))
 }
 
 fn default_engines_for_mode(mode: Mode) -> Vec<&'static WebEngineSpec> {
@@ -414,6 +457,7 @@ mod parse {
             HitParser::OpenAlexJson => parse_openalex(body),
             HitParser::CrossrefJson => parse_crossref(body),
             HitParser::SemanticScholarJson => parse_semantic_scholar(body),
+            HitParser::SearxNgJson => parse_searxng(body),
         };
         assemble(raw, spec.name, max)
     }
@@ -581,6 +625,18 @@ mod parse {
             .unwrap_or_default()
     }
 
+    fn parse_searxng(body: &str) -> Vec<RawHit> {
+        json_array_hits(body, "/results", searxng_hit)
+    }
+
+    fn searxng_hit(item: &Value) -> Option<RawHit> {
+        Some(RawHit {
+            title: non_empty_str(item.get("title"))?,
+            url: non_empty_str(item.get("url"))?,
+            snippet: non_empty_str(item.get("content")).unwrap_or_default(),
+        })
+    }
+
     fn parse_openalex(body: &str) -> Vec<RawHit> {
         json_array_hits(body, "/results", openalex_hit)
     }
@@ -711,7 +767,11 @@ mod tests {
                 "{}",
                 spec.name
             );
-            assert!(spec.url.starts_with("https://"), "{}", spec.name);
+            if spec.url_from_config {
+                assert!(spec.url.is_empty(), "{}", spec.name);
+            } else {
+                assert!(spec.url.starts_with("https://"), "{}", spec.name);
+            }
         }
     }
 
@@ -727,7 +787,7 @@ mod tests {
     #[test]
     fn every_mode_has_default_engines_and_google_is_opt_in() {
         for mode in Mode::all() {
-            let engines = engines_for_mode(mode, &[]);
+            let engines = engines_for_mode(mode, &WebSearchConfig::default());
             assert!(!engines.is_empty(), "{mode}");
             assert!(
                 engines.iter().all(|spec| spec.id != WebEngineId::Google),
@@ -737,8 +797,93 @@ mod tests {
     }
 
     #[test]
+    fn resolve_url_falls_back_to_the_table_and_needs_config_for_searxng() {
+        struct Case {
+            name: &'static str,
+            engine: &'static str,
+            searxng_url: &'static str,
+            want: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                name: "fixed engine ignores the config",
+                engine: "bing",
+                searxng_url: "https://searx.example.org",
+                want: Some("https://www.bing.com/search"),
+            },
+            Case {
+                name: "searxng builds the search path",
+                engine: "searxng",
+                searxng_url: "https://searx.example.org",
+                want: Some("https://searx.example.org/search"),
+            },
+            Case {
+                name: "searxng tolerates a trailing slash",
+                engine: "searxng",
+                searxng_url: "https://searx.example.org/",
+                want: Some("https://searx.example.org/search"),
+            },
+            Case {
+                name: "unconfigured searxng resolves to nothing",
+                engine: "searxng",
+                searxng_url: "",
+                want: None,
+            },
+            Case {
+                name: "blank searxng url resolves to nothing",
+                engine: "searxng",
+                searxng_url: "   ",
+                want: None,
+            },
+        ];
+        for case in cases {
+            let config = WebSearchConfig {
+                searxng_url: case.searxng_url.to_string(),
+                ..WebSearchConfig::default()
+            };
+            let spec = engine_by_name(case.engine).unwrap();
+            let got = resolve_url(spec, &config);
+            assert_eq!(got.as_deref(), case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn searxng_leads_the_defaults_only_once_configured() {
+        let off = WebSearchConfig::default();
+        let names: Vec<&str> = engines_for_mode(Mode::General, &off)
+            .iter()
+            .map(|spec| spec.name)
+            .collect();
+        assert_eq!(names, vec!["ddg", "bing"]);
+
+        let on = WebSearchConfig {
+            searxng_url: "https://searx.example.org".to_string(),
+            ..WebSearchConfig::default()
+        };
+        let names: Vec<&str> = engines_for_mode(Mode::General, &on)
+            .iter()
+            .map(|spec| spec.name)
+            .collect();
+        assert_eq!(names, vec!["searxng", "ddg", "bing"]);
+    }
+
+    #[test]
+    fn an_explicit_allowlist_still_wins_over_the_searxng_prepend() {
+        let config = WebSearchConfig {
+            searxng_url: "https://searx.example.org".to_string(),
+            engines: vec!["mojeek".to_string()],
+            ..WebSearchConfig::default()
+        };
+        let names: Vec<&str> = engines_for_mode(Mode::General, &config)
+            .iter()
+            .map(|spec| spec.name)
+            .collect();
+        assert_eq!(names, vec!["mojeek"]);
+    }
+
+    #[test]
     fn scientific_mode_prioritizes_academic_engines() {
-        let engines = engines_for_mode(Mode::Scientific, &[]);
+        let engines = engines_for_mode(Mode::Scientific, &WebSearchConfig::default());
         assert_eq!(engines[0].category, WebCategory::Academic);
         assert!(engines.iter().any(|spec| spec.category == WebCategory::Web));
     }
@@ -836,8 +981,11 @@ mod tests {
             },
         ];
         for case in cases {
-            let allowlist: Vec<String> = case.allowlist.iter().map(ToString::to_string).collect();
-            let names: Vec<&str> = engines_for_mode(Mode::General, &allowlist)
+            let config = WebSearchConfig {
+                engines: case.allowlist.iter().map(ToString::to_string).collect(),
+                ..WebSearchConfig::default()
+            };
+            let names: Vec<&str> = engines_for_mode(Mode::General, &config)
                 .iter()
                 .map(|spec| spec.name)
                 .collect();
@@ -1179,6 +1327,7 @@ mod parse_tests {
     const CROSSREF: &str = include_str!("../../tests/fixtures/websearch/crossref.json");
     const SEMANTIC_SCHOLAR: &str =
         include_str!("../../tests/fixtures/websearch/semantic_scholar.json");
+    const SEARXNG: &str = include_str!("../../tests/fixtures/websearch/searxng.json");
 
     fn hits(engine: &str, body: &str) -> Vec<WebHit> {
         parse_hits(engine_by_name(engine).unwrap(), body, 10)
@@ -1240,6 +1389,15 @@ mod parse_tests {
                 want_title: "Rust Programming Language",
                 want_url: "https://www.rust-lang.org/",
                 want_snippet: "A language empowering everyone to build reliable and efficient software.",
+            },
+            Case {
+                name: "searxng reads the json api and tolerates empty content",
+                engine: "searxng",
+                body: SEARXNG,
+                want_count: 3,
+                want_title: "Tokio - An asynchronous Rust runtime",
+                want_url: "https://tokio.rs/tokio/tutorial",
+                want_snippet: "Tokio is an asynchronous runtime for the Rust programming language, providing the building blocks for writing network applications.",
             },
             Case {
                 name: "openalex prefers doi and composes venue year authors",

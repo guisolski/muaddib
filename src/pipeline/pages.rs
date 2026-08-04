@@ -105,6 +105,7 @@ mod tests {
         fn search<'a>(
             &'a self,
             _spec: &'static WebEngineSpec,
+            _base_url: &'a str,
             _query: &'a str,
             _mailto: &'a str,
             _max_hits: usize,

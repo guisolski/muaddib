@@ -546,6 +546,7 @@ mod tests {
         fn search<'a>(
             &'a self,
             _spec: &'static crate::core::websearch::WebEngineSpec,
+            _base_url: &'a str,
             _query: &'a str,
             _mailto: &'a str,
             max_hits: usize,

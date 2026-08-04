@@ -1,0 +1,32 @@
+{
+  "query": "rust async runtimes",
+  "number_of_results": 3,
+  "results": [
+    {
+      "url": "https://tokio.rs/tokio/tutorial",
+      "title": "Tokio - An asynchronous Rust runtime",
+      "content": "Tokio is an asynchronous runtime for the Rust programming language, providing the building blocks for writing network applications.",
+      "engine": "duckduckgo",
+      "category": "general",
+      "score": 3.5
+    },
+    {
+      "url": "https://github.com/smol-rs/smol",
+      "title": "smol-rs/smol: A small and fast async runtime for Rust",
+      "content": "A small and fast async runtime for Rust.",
+      "engine": "google",
+      "category": "general",
+      "score": 2.1
+    },
+    {
+      "url": "https://docs.rs/async-std/latest/async_std/",
+      "title": "async_std - Rust",
+      "content": "",
+      "engine": "brave",
+      "category": "general",
+      "score": 1.4
+    }
+  ],
+  "answers": [],
+  "suggestions": []
+}
