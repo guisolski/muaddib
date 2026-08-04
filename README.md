@@ -126,11 +126,38 @@ to the first available engine automatically.
 
 ## Install
 
+**Homebrew** (macOS, Linux):
+
+```sh
+brew install guisolski/muaddib/muaddib
+```
+
+**Install script** (macOS, Linux — downloads the prebuilt binary and verifies its checksum):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/guisolski/muaddib/main/scripts/install.sh | sh
+```
+
+Installs to `~/.local/bin` by default; set `MUADDIB_INSTALL_DIR` to change that, or
+`MUADDIB_VERSION` to pin a tag.
+
+**Cargo** (any platform with Rust 1.93+):
+
+```sh
+cargo install muaddib
+```
+
+**From source**:
+
 ```sh
 git clone https://github.com/guisolski/muaddib
 cd muaddib
 make install        # cargo install --path .
 ```
+
+Prebuilt binaries for macOS (arm64, x86_64) and Linux (x86_64, arm64) are attached to
+every [release](https://github.com/guisolski/muaddib/releases), each with a `.sha256`
+alongside it.
 
 ## Usage
 

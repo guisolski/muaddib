@@ -94,8 +94,36 @@ curl -sS -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
 
 ## Releasing
 
+A tag drives everything. `.github/workflows/release.yml` fires on `v[0-9]+.[0-9]+.[0-9]+*`:
+
 ```sh
 make ci
+# bump `version` in Cargo.toml, commit it
 git tag -a vX.Y.Z -m "..."
 git push origin main --tags
 ```
+
+Four jobs then run:
+
+| Job | What it produces |
+|---|---|
+| `create-release` | the GitHub release for the tag |
+| `upload-assets` | `muaddib-<target>.tar.gz` + `.sha256` for macOS arm64/x86_64 and Linux x86_64/arm64 |
+| `publish-crate` | `cargo publish` to crates.io |
+| `homebrew-tap` | rewrites `Formula/muaddib.rb` in `guisolski/homebrew-muaddib` and pushes it |
+
+Cross-compilation, archive naming, and checksums come from
+`taiki-e/upload-rust-binary-action`; the formula is rendered from the published
+`.sha256` files, so the tap can never drift from the binaries.
+
+### Secrets the workflow needs
+
+| Secret | Used by | Notes |
+|---|---|---|
+| `GITHUB_TOKEN` | create-release, upload-assets | provided automatically |
+| `CARGO_REGISTRY_TOKEN` | publish-crate | crates.io API token |
+| `HOMEBREW_TAP_TOKEN` | homebrew-tap | PAT with write access to the tap repo |
+
+`scripts/install.sh` is the `curl | sh` path: it maps `uname` to a target triple,
+resolves the latest tag through the GitHub API, verifies the `.sha256` when `shasum`
+is available, and installs to `$MUADDIB_INSTALL_DIR` (default `~/.local/bin`).
