@@ -9,10 +9,14 @@ fn smoke_dir() -> PathBuf {
 }
 
 fn write_smoke_config(name: &str) -> PathBuf {
+    write_config(name, "[websearch]\nenabled = false\n")
+}
+
+fn write_config(name: &str, extra_sections: &str) -> PathBuf {
     let fake = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-engine.sh");
     let path = smoke_dir().join(name);
     let contents = format!(
-        "language = \"en\"\nengine = \"claude\"\nvalidate_links = false\n\n[engines.claude]\nbin = \"{}\"\n",
+        "language = \"en\"\nengine = \"claude\"\nvalidate_links = false\n\n{extra_sections}\n[engines.claude]\nbin = \"{}\"\n",
         fake.display()
     );
     std::fs::write(&path, contents).expect("config file is writable");
@@ -52,6 +56,23 @@ fn print_mode_emits_a_parsable_answer_on_stdout() {
     assert!(!answer.sources.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("sub-queries"));
+}
+
+#[test]
+fn no_websearch_flag_disables_grounding_for_the_run() {
+    let config = write_config("config-no-websearch.toml", "[websearch]\nenabled = true\n");
+    let history = history_path("history-no-websearch.jsonl");
+    let output = muaddib(&config, &history)
+        .args(["--no-websearch", "--print", "rust async runtimes"])
+        .output()
+        .expect("binary runs");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("web hits"));
 }
 
 #[test]

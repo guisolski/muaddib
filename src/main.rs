@@ -37,6 +37,9 @@ struct Cli {
     )]
     fast: bool,
 
+    #[arg(long, help = "Disable the built-in web-search grounding for this run")]
+    no_websearch: bool,
+
     #[arg(long, help = "Run headless and print the answer JSON to stdout")]
     print: bool,
 
@@ -93,6 +96,9 @@ fn apply_cli_overrides(mut config: Config, cli: &Cli) -> Config {
     }
     if let Some(lang) = &cli.lang {
         config.language.clone_from(lang);
+    }
+    if cli.no_websearch {
+        config.websearch.enabled = false;
     }
     config
 }
