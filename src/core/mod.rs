@@ -7,3 +7,4 @@ pub mod history;
 pub mod mode;
 pub mod plan;
 pub mod prompts;
+pub mod websearch;

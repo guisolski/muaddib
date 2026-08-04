@@ -1,0 +1,24 @@
+{
+  "total": 2,
+  "offset": 0,
+  "data": [
+    {
+      "paperId": "649def34f8be52c8b66281af98ae884c09aef38b",
+      "url": "https://www.semanticscholar.org/paper/649def34f8be52c8b66281af98ae884c09aef38b",
+      "title": "Caffeine consumption and sleep quality in a large observational cohort",
+      "abstract": "We examined the association between daily caffeine intake and objective sleep measures in 7,000 adults. Higher intake within six hours of bedtime was associated with reduced total sleep time and increased sleep onset latency.",
+      "venue": "Sleep Medicine",
+      "year": 2018,
+      "externalIds": { "DOI": "10.1016/j.sleep.2018.01.001" }
+    },
+    {
+      "paperId": "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00",
+      "url": null,
+      "title": "Stimulants and circadian rhythm: a review",
+      "abstract": null,
+      "venue": "",
+      "year": 2016,
+      "externalIds": { "DOI": "10.1000/stim.2016" }
+    }
+  ]
+}

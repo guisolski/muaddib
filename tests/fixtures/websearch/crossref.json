@@ -1,0 +1,29 @@
+{
+  "status": "ok",
+  "message-type": "work-list",
+  "message-version": "1.0.0",
+  "message": {
+    "total-results": 2,
+    "items": [
+      {
+        "DOI": "10.1053/smrv.1999.0088",
+        "title": ["Caffeine and sleep"],
+        "URL": "https://doi.org/10.1053/smrv.1999.0088",
+        "container-title": ["Sleep Medicine Reviews"],
+        "issued": { "date-parts": [[2000, 2]] },
+        "author": [
+          { "given": "Ian", "family": "Hindmarch" }
+        ]
+      },
+      {
+        "DOI": "10.1000/untitled",
+        "title": [],
+        "URL": "https://doi.org/10.1000/untitled",
+        "container-title": [],
+        "issued": { "date-parts": [[2010]] }
+      }
+    ],
+    "items-per-page": 3,
+    "query": { "search-terms": "caffeine sleep" }
+  }
+}

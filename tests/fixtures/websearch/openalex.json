@@ -1,0 +1,40 @@
+{
+  "meta": { "count": 3, "db_response_time_ms": 42, "page": 1, "per_page": 3 },
+  "results": [
+    {
+      "id": "https://openalex.org/W2100837269",
+      "doi": "https://doi.org/10.5664/jcsm.3170",
+      "display_name": "Caffeine Effects on Sleep Taken 0, 3, or 6 Hours before Going to Bed",
+      "publication_year": 2013,
+      "primary_location": {
+        "landing_page_url": "https://doi.org/10.5664/jcsm.3170",
+        "source": { "display_name": "Journal of Clinical Sleep Medicine" }
+      },
+      "authorships": [
+        { "author": { "display_name": "Christopher L. Drake" } },
+        { "author": { "display_name": "Timothy Roehrs" } }
+      ]
+    },
+    {
+      "id": "https://openalex.org/W1999999999",
+      "doi": null,
+      "display_name": "Caffeine consumption and self-reported sleep quality",
+      "publication_year": 2018,
+      "primary_location": {
+        "landing_page_url": "https://example-journal.org/articles/caffeine-sleep-quality",
+        "source": { "display_name": "Sleep Health" }
+      },
+      "authorships": [
+        { "author": { "display_name": "Jane Researcher" } }
+      ]
+    },
+    {
+      "id": "https://openalex.org/W1888888888",
+      "doi": null,
+      "display_name": "An orphan record without any usable link",
+      "publication_year": 2011,
+      "primary_location": null,
+      "authorships": []
+    }
+  ]
+}
