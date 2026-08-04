@@ -49,6 +49,7 @@ pub enum ConfigField {
     Engine,
     Model,
     ValidateLinks,
+    WebSearch,
     MaxParallel,
 }
 
@@ -74,6 +75,10 @@ pub const CONFIG_FIELDS: &[ConfigFieldSpec] = &[
     ConfigFieldSpec {
         field: ConfigField::ValidateLinks,
         label: "validate links",
+    },
+    ConfigFieldSpec {
+        field: ConfigField::WebSearch,
+        label: "web search",
     },
     ConfigFieldSpec {
         field: ConfigField::MaxParallel,
@@ -110,6 +115,7 @@ pub struct ConfigForm {
     pub engine_idx: usize,
     pub model_idx: usize,
     pub validate_links: bool,
+    pub websearch: bool,
     pub max_parallel: u8,
 }
 
@@ -130,6 +136,7 @@ impl ConfigForm {
                 .get(engine_idx)
                 .map_or(0, |status| configured_model_idx(config, status.spec)),
             validate_links: config.validate_links,
+            websearch: config.websearch.enabled,
             max_parallel: config.max_parallel,
         }
     }
@@ -150,6 +157,7 @@ impl ConfigForm {
             config.set_model_override(engine_name, model);
         }
         config.validate_links = self.validate_links;
+        config.websearch.enabled = self.websearch;
         config.max_parallel = self.max_parallel.clamp(MIN_PARALLEL, MAX_PARALLEL);
     }
 

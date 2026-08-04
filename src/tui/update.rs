@@ -470,6 +470,7 @@ fn step_config_value(form: &mut ConfigForm, step: i8, context: &FormContext) {
             form.model_idx = cycle(form.model_idx, count, step);
         }
         ConfigField::ValidateLinks => form.validate_links = !form.validate_links,
+        ConfigField::WebSearch => form.websearch = !form.websearch,
         ConfigField::MaxParallel => {
             let raw = i16::from(form.max_parallel) + i16::from(step);
             let clamped = raw.clamp(
@@ -1100,6 +1101,27 @@ mod tests {
         assert_eq!(app.overlay, None);
         assert_eq!(app.config.language, "es");
         assert!(!app.config.validate_links);
+    }
+
+    #[test]
+    fn config_modal_toggles_web_search_grounding() {
+        let mut app = app();
+        assert!(app.config.websearch.enabled);
+        update(&mut app, ctrl('o'));
+        for _ in 0..4 {
+            update(&mut app, key(KeyCode::Down));
+        }
+        update(&mut app, key(KeyCode::Right));
+        let command = update(&mut app, key(KeyCode::Enter));
+        assert_eq!(command, Some(Command::SaveConfig));
+        assert!(!app.config.websearch.enabled);
+        update(&mut app, ctrl('o'));
+        for _ in 0..4 {
+            update(&mut app, key(KeyCode::Down));
+        }
+        update(&mut app, key(KeyCode::Left));
+        update(&mut app, key(KeyCode::Enter));
+        assert!(app.config.websearch.enabled);
     }
 
     #[test]

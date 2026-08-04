@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Clear, Paragraph};
 
 const MODAL_WIDTH: u16 = 50;
-const MODAL_HEIGHT: u16 = 11;
+const MODAL_HEIGHT: u16 = 12;
 
 pub fn draw(frame: &mut Frame, app: &App, form: &ConfigForm) {
     let area = centered_rect(frame.area(), MODAL_WIDTH, MODAL_HEIGHT);
@@ -65,15 +65,14 @@ fn field_value(app: &App, form: &ConfigForm, field: ConfigField) -> String {
         ConfigField::Language => LANGUAGES[form.language_idx % LANGUAGES.len()].to_string(),
         ConfigField::Engine => engine_value(app, form),
         ConfigField::Model => model_value(app, form),
-        ConfigField::ValidateLinks => {
-            if form.validate_links {
-                "on".to_string()
-            } else {
-                "off".to_string()
-            }
-        }
+        ConfigField::ValidateLinks => toggle_value(form.validate_links),
+        ConfigField::WebSearch => toggle_value(form.websearch),
         ConfigField::MaxParallel => form.max_parallel.to_string(),
     }
+}
+
+fn toggle_value(enabled: bool) -> String {
+    if enabled { "on" } else { "off" }.to_string()
 }
 
 fn model_value(app: &App, form: &ConfigForm) -> String {
