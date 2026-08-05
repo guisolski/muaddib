@@ -1,4 +1,5 @@
 use crate::core::answer::Answer;
+use crate::core::cost::EngineUsage;
 use crate::core::plan::SearchPlan;
 use crate::pipeline::{LinkStatus, SearchEvent, SearchHandle};
 use std::collections::HashMap;
@@ -50,6 +51,7 @@ pub struct SearchState {
     pub reveal_started: Option<u64>,
     pub pulse: Option<Pulse>,
     pub failed_at: Option<u64>,
+    pub usage: EngineUsage,
 }
 
 impl SearchState {
@@ -66,6 +68,7 @@ impl SearchState {
         self.reveal_started = None;
         self.pulse = None;
         self.failed_at = None;
+        self.usage = EngineUsage::default();
         self.started_at = Some(now);
     }
 
@@ -120,6 +123,10 @@ impl SearchState {
                     SubQueryState::Failed
                 };
                 self.set_progress(idx, state);
+                SearchOutcome::None
+            }
+            SearchEvent::CallCosted { usage } => {
+                self.usage = self.usage.plus(usage);
                 SearchOutcome::None
             }
             SearchEvent::SynthesisStarted => {

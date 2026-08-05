@@ -1,4 +1,4 @@
-use crate::core::engine::{build_args, envelope_text};
+use crate::core::engine::{build_args, envelope_output};
 use crate::engines::{
     BoxedEngineFuture, Engine, EngineError, EngineJob, EngineOutput, EngineSpec, EngineStatus,
 };
@@ -40,7 +40,7 @@ impl CliEngine {
             return Err(failure_from_output(&output));
         }
         let stdout = String::from_utf8_lossy(&output.stdout);
-        envelope_text(self.spec.parse, &stdout).map(|text| EngineOutput { text })
+        envelope_output(self.spec.parse, &stdout)
     }
 
     fn command(&self, job: &EngineJob) -> Command {

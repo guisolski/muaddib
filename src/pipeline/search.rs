@@ -13,7 +13,7 @@ use crate::core::plan::{
 use crate::core::prompts::{expansion_prompt, fast_prompt, sub_search_prompt, synthesis_prompt};
 use crate::core::readability::PageText;
 use crate::core::websearch::{WebHit, allowed_urls_with_hits, snippet_sub_results};
-use crate::engines::{Engine, EngineJob};
+use crate::engines::{Engine, EngineError, EngineJob, EngineOutput};
 use crate::pipeline::websearch::{WebFetcher, default_fetcher, websearch_stage};
 use crate::pipeline::{SearchEvent, SearchHandle};
 use futures::stream::{self, StreamExt};
@@ -103,7 +103,7 @@ async fn run_stages(
     if request.fast {
         return run_fast_stages(engine, request, tx).await;
     }
-    let plan = expansion_stage(engine, request).await;
+    let plan = expansion_stage(engine, request, tx).await;
     send(tx, SearchEvent::PlanReady(plan.clone())).await;
     let hits = websearch_stage(fetcher, &plan, &request.websearch, tx).await;
     let pages = page_grounding_stage(fetcher, &plan, &hits, &request.websearch, tx).await;
@@ -117,7 +117,7 @@ async fn run_stages(
     }
     send(tx, SearchEvent::SynthesisStarted).await;
     let all_hits: Vec<WebHit> = hits.into_iter().flatten().collect();
-    let answer = synthesis_stage(engine, &plan, &merged, &all_hits, request).await?;
+    let answer = synthesis_stage(engine, &plan, &merged, &all_hits, request, tx).await?;
     send(tx, SearchEvent::AnswerReady(Box::new(answer.clone()))).await;
     link_validation_stage(&answer, request, tx).await;
     image_fetch_stage(&answer, request, tx).await;
@@ -150,7 +150,7 @@ async fn run_fast_stages(
     let plan = literal_plan(&request.query, request.mode, &request.answer_lang);
     send(tx, SearchEvent::PlanReady(plan)).await;
     send(tx, SearchEvent::SubQueryStarted { idx: 0 }).await;
-    let result = fast_answer_stage(engine, request).await;
+    let result = fast_answer_stage(engine, request, tx).await;
     send(
         tx,
         SearchEvent::SubQueryFinished {
@@ -165,7 +165,11 @@ async fn run_fast_stages(
     Ok(())
 }
 
-async fn fast_answer_stage(engine: &dyn Engine, request: &SearchRequest) -> Result<Answer, String> {
+async fn fast_answer_stage(
+    engine: &dyn Engine,
+    request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> Result<Answer, String> {
     let inline_schema = !engine.supports_json_schema();
     let job = EngineJob {
         prompt: fast_prompt(
@@ -178,8 +182,7 @@ async fn fast_answer_stage(engine: &dyn Engine, request: &SearchRequest) -> Resu
         schema: Some(FAST_ANSWER_SCHEMA),
         timeout: request.fast_timeout,
     };
-    let output = engine
-        .run(&job)
+    let output = run_reporting_usage(engine, &job, tx)
         .await
         .map_err(|error| format!("fast search failed: {error}"))?;
     let value = extract_json(&output.text)
@@ -190,7 +193,25 @@ async fn fast_answer_stage(engine: &dyn Engine, request: &SearchRequest) -> Resu
     Ok(renumber_sources(strip_image_blocks(answer), &allowed))
 }
 
-async fn expansion_stage(engine: &dyn Engine, request: &SearchRequest) -> SearchPlan {
+async fn run_reporting_usage(
+    engine: &dyn Engine,
+    job: &EngineJob,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> Result<EngineOutput, EngineError> {
+    let result = engine.run(job).await;
+    if let Ok(output) = &result
+        && let Some(usage) = output.usage
+    {
+        send(tx, SearchEvent::CallCosted { usage }).await;
+    }
+    result
+}
+
+async fn expansion_stage(
+    engine: &dyn Engine,
+    request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> SearchPlan {
     let prompt = expansion_prompt(
         &request.query,
         request.mode.spec(),
@@ -203,7 +224,7 @@ async fn expansion_stage(engine: &dyn Engine, request: &SearchRequest) -> Search
         schema: None,
         timeout: EXPANSION_TIMEOUT,
     };
-    let expansion = match engine.run(&job).await {
+    let expansion = match run_reporting_usage(engine, &job, tx).await {
         Ok(output) => extract_json(&output.text).unwrap_or(serde_json::Value::Null),
         Err(_) => serde_json::Value::Null,
     };
@@ -262,7 +283,7 @@ async fn track_sub_query(
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Option<SubResult> {
     send(tx, SearchEvent::SubQueryStarted { idx }).await;
-    let result = run_sub_query(engine, &grounded, mode_spec, request.engine_timeout).await;
+    let result = run_sub_query(engine, &grounded, mode_spec, request.engine_timeout, tx).await;
     let ok = result.is_some();
     send(tx, SearchEvent::SubQueryFinished { idx, ok }).await;
     result
@@ -273,13 +294,14 @@ async fn run_sub_query(
     grounded: &GroundedSubQuery<'_>,
     mode_spec: &ModeSpec,
     timeout: Duration,
+    tx: &mpsc::Sender<SearchEvent>,
 ) -> Option<SubResult> {
     let job = EngineJob {
         prompt: sub_search_prompt(grounded.sub, mode_spec, grounded.hits, grounded.pages),
         schema: None,
         timeout,
     };
-    let output = engine.run(&job).await.ok()?;
+    let output = run_reporting_usage(engine, &job, tx).await.ok()?;
     let value = extract_json(&output.text)?;
     let response = parse_sub_response(&value)?;
     Some(SubResult {
@@ -295,6 +317,7 @@ async fn synthesis_stage(
     merged: &MergedFindings,
     hits: &[WebHit],
     request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
 ) -> Result<Answer, String> {
     let inline_schema = !engine.supports_json_schema();
     let job = EngineJob {
@@ -302,8 +325,7 @@ async fn synthesis_stage(
         schema: Some(ANSWER_SCHEMA),
         timeout: request.engine_timeout,
     };
-    let output = engine
-        .run(&job)
+    let output = run_reporting_usage(engine, &job, tx)
         .await
         .map_err(|error| format!("synthesis failed: {error}"))?;
     let value = extract_json(&output.text)
@@ -510,9 +532,7 @@ mod tests {
                 if self.fail_markers.contains(&marker) {
                     return Err(EngineError::Reported(format!("forced failure: {marker}")));
                 }
-                Ok(EngineOutput {
-                    text: self.canned_response(marker),
-                })
+                Ok(EngineOutput::from_text(self.canned_response(marker)))
             })
         }
     }

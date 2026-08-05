@@ -1,3 +1,4 @@
+use crate::core::cost::{EngineUsage, parse_usage};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -98,9 +99,16 @@ pub struct EngineJob {
     pub timeout: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EngineOutput {
     pub text: String,
+    pub usage: Option<EngineUsage>,
+}
+
+impl EngineOutput {
+    pub fn from_text(text: String) -> Self {
+        Self { text, usage: None }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -169,6 +177,24 @@ pub fn envelope_text(strategy: ParseStrategy, stdout: &str) -> Result<String, En
         ParseStrategy::GenericJson => Ok(generic_envelope_text(stdout)),
         ParseStrategy::RawText => Ok(stdout.to_string()),
     }
+}
+
+pub fn envelope_output(strategy: ParseStrategy, stdout: &str) -> Result<EngineOutput, EngineError> {
+    let text = envelope_text(strategy, stdout)?;
+    Ok(EngineOutput {
+        text,
+        usage: envelope_usage(strategy, stdout),
+    })
+}
+
+fn envelope_usage(strategy: ParseStrategy, stdout: &str) -> Option<EngineUsage> {
+    if strategy != ParseStrategy::ClaudeJson {
+        return None;
+    }
+    serde_json::from_str::<Value>(stdout.trim())
+        .ok()
+        .as_ref()
+        .and_then(parse_usage)
 }
 
 fn claude_envelope_text(stdout: &str) -> Result<String, EngineError> {
@@ -359,6 +385,56 @@ mod tests {
     fn claude_strategy_unwraps_the_result_field() {
         let text = envelope_text(ParseStrategy::ClaudeJson, CLAUDE_ENVELOPE).unwrap();
         assert_eq!(text, "{\"summary\":\"inner payload\",\"findings\":[]}");
+    }
+
+    #[test]
+    fn only_the_claude_strategy_reports_usage() {
+        struct Case {
+            name: &'static str,
+            strategy: ParseStrategy,
+            stdout: &'static str,
+            want: Option<EngineUsage>,
+        }
+        let cases = [
+            Case {
+                name: "claude envelope carries cost and tokens",
+                strategy: ParseStrategy::ClaudeJson,
+                stdout: CLAUDE_ENVELOPE,
+                want: Some(EngineUsage {
+                    input_tokens: 18_234,
+                    output_tokens: 590,
+                    cost_usd: 0.0142,
+                }),
+            },
+            Case {
+                name: "a claude envelope without usage reports nothing",
+                strategy: ParseStrategy::ClaudeJson,
+                stdout: CLAUDE_STRUCTURED,
+                want: None,
+            },
+            Case {
+                name: "generic engines report nothing",
+                strategy: ParseStrategy::GenericJson,
+                stdout: CLAUDE_ENVELOPE,
+                want: None,
+            },
+            Case {
+                name: "raw text engines report nothing",
+                strategy: ParseStrategy::RawText,
+                stdout: CLAUDE_ENVELOPE,
+                want: None,
+            },
+            Case {
+                name: "non-json stdout reports nothing",
+                strategy: ParseStrategy::ClaudeJson,
+                stdout: "just some prose",
+                want: None,
+            },
+        ];
+        for case in cases {
+            let output = envelope_output(case.strategy, case.stdout).unwrap();
+            assert_eq!(output.usage, case.want, "{}", case.name);
+        }
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use clap::Parser;
 use muaddib::config_store;
 use muaddib::core::config::Config;
+use muaddib::core::cost::{EngineUsage, usage_label};
 use muaddib::core::mode::Mode;
 use muaddib::engines::cli::CliEngine;
 use muaddib::engines::{EngineSpec, EngineStatus, choose_engine, detect_engines};
@@ -185,10 +186,12 @@ async fn stream_search_to_stdio(engine: Arc<CliEngine>, request: SearchRequest) 
     let mut handle = spawn_search(engine, request);
     let mut answer: Option<Box<muaddib::core::answer::Answer>> = None;
     let mut failure = None;
+    let mut usage = EngineUsage::default();
     while let Some(event) = handle.events.recv().await {
         match event {
             SearchEvent::AnswerReady(ready) => answer = Some(ready),
             SearchEvent::Failed(message) => failure = Some(message),
+            SearchEvent::CallCosted { usage: call } => usage = usage.plus(call),
             other => {
                 report_progress(&other);
                 if let (SearchEvent::LinkChecked { source_id, status }, Some(answer)) =
@@ -198,6 +201,9 @@ async fn stream_search_to_stdio(engine: Arc<CliEngine>, request: SearchRequest) 
                 }
             }
         }
+    }
+    if let Some(label) = usage_label(usage) {
+        eprintln!("muaddib: {label}");
     }
     if let Some(answer) = answer {
         let json =
@@ -250,6 +256,7 @@ fn report_progress(event: &SearchEvent) {
         }
         SearchEvent::Completed
         | SearchEvent::SubQueryStarted { .. }
+        | SearchEvent::CallCosted { .. }
         | SearchEvent::AnswerReady(_)
         | SearchEvent::ImageFetched { .. }
         | SearchEvent::Failed(_) => {}

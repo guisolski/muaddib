@@ -11,6 +11,7 @@ pub mod websearch;
 
 use crate::core::answer::Answer;
 pub use crate::core::citations::LinkStatus;
+use crate::core::cost::EngineUsage;
 use crate::core::plan::SearchPlan;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +21,7 @@ pub enum SearchEvent {
     PageFetched { url: String, ok: bool },
     SubQueryStarted { idx: usize },
     SubQueryFinished { idx: usize, ok: bool },
+    CallCosted { usage: EngineUsage },
     SynthesisStarted,
     AnswerReady(Box<Answer>),
     LinkChecked { source_id: u32, status: LinkStatus },

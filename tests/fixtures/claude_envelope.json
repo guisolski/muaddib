@@ -4,5 +4,12 @@
   "is_error": false,
   "duration_ms": 4321,
   "result": "{\"summary\":\"inner payload\",\"findings\":[]}",
-  "session_id": "0000-fixture"
+  "session_id": "0000-fixture",
+  "total_cost_usd": 0.0142,
+  "usage": {
+    "input_tokens": 12,
+    "cache_creation_input_tokens": 400,
+    "cache_read_input_tokens": 17822,
+    "output_tokens": 590
+  }
 }

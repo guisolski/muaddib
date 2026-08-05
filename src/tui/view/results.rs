@@ -1,3 +1,4 @@
+use crate::core::cost::usage_label;
 use crate::tui::anim;
 use crate::tui::app::{App, Focus};
 use crate::tui::images::ImageRuntime;
@@ -76,6 +77,9 @@ fn footer_line(app: &App) -> Line<'static> {
         spans.push(Span::styled("⚡ ", theme::warn()));
     }
     spans.push(Span::styled(footer_hint(app.focus), theme::dim()));
+    if let Some(label) = usage_label(app.search.usage) {
+        spans.push(Span::styled(format!(" \u{b7} {label}"), theme::dim()));
+    }
     Line::from(spans)
 }
 
