@@ -78,9 +78,9 @@ jobs:
           for target in aarch64-apple-darwin x86_64-apple-darwin \
                         aarch64-unknown-linux-gnu x86_64-unknown-linux-gnu; do
             gh release download "$TAG" --repo "$REPO" \
-              --pattern "muaddib-${target}.tar.gz.sha256" --dir "$sums"
+              --pattern "muaddib-${target}.sha256" --dir "$sums"
           done
-          sum() { cut -d' ' -f1 < "$sums/muaddib-$1.tar.gz.sha256"; }
+          sum() { cut -d' ' -f1 < "$sums/muaddib-$1.sha256"; }
           mkdir -p Formula
           cat > Formula/muaddib.rb <<FORMULA
           class Muaddib < Formula
