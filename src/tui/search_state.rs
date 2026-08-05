@@ -1,10 +1,13 @@
 use crate::core::answer::Answer;
 use crate::core::cost::EngineUsage;
 use crate::core::plan::SearchPlan;
+use crate::core::stream::EngineActivity;
 use crate::pipeline::{LinkStatus, SearchEvent, SearchHandle};
 use std::collections::HashMap;
 use std::time::Instant;
 use tokio::sync::mpsc::Receiver;
+
+pub const MAX_ACTIVITY_LINES: usize = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SubQueryState {
@@ -45,6 +48,7 @@ pub struct SearchState {
     pub synthesizing: bool,
     pub reflecting: bool,
     pub gaps: Option<usize>,
+    pub activity: Vec<EngineActivity>,
     pub started_at: Option<Instant>,
     pub handle: Option<SearchHandle>,
     pub answer: Option<Answer>,
@@ -66,6 +70,7 @@ impl SearchState {
         self.synthesizing = false;
         self.reflecting = false;
         self.gaps = None;
+        self.activity.clear();
         self.answer = None;
         self.links.clear();
         self.images.clear();
@@ -134,6 +139,10 @@ impl SearchState {
                 self.usage = self.usage.plus(usage);
                 SearchOutcome::None
             }
+            SearchEvent::EngineActivity { label, target } => {
+                self.record_activity(EngineActivity { label, target });
+                SearchOutcome::None
+            }
             SearchEvent::SynthesisStarted => {
                 self.synthesizing = true;
                 self.reflecting = false;
@@ -181,6 +190,16 @@ impl SearchState {
                 self.failed_at = Some(tick);
                 SearchOutcome::Failed(message)
             }
+        }
+    }
+
+    fn record_activity(&mut self, reported: EngineActivity) {
+        if self.activity.last() == Some(&reported) {
+            return;
+        }
+        self.activity.push(reported);
+        if self.activity.len() > MAX_ACTIVITY_LINES {
+            self.activity.remove(0);
         }
     }
 
@@ -356,6 +375,29 @@ mod tests {
         );
         assert_eq!(state.sub_query_state(0), SubQueryState::Done);
         assert_eq!(state.sub_query_state(2), SubQueryState::Pending);
+    }
+
+    #[test]
+    fn activity_keeps_only_the_last_few_lines_without_repeating_itself() {
+        let mut state = SearchState::default();
+        for target in ["one", "one", "two", "three", "four"] {
+            state.apply_event(
+                SearchEvent::EngineActivity {
+                    label: "searching",
+                    target: target.to_string(),
+                },
+                0,
+            );
+        }
+        let targets: Vec<&str> = state
+            .activity
+            .iter()
+            .map(|reported| reported.target.as_str())
+            .collect();
+        assert_eq!(targets, vec!["two", "three", "four"]);
+        assert_eq!(state.activity.len(), MAX_ACTIVITY_LINES);
+        state.begin(Instant::now());
+        assert!(state.activity.is_empty());
     }
 
     #[test]

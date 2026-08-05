@@ -22,6 +22,7 @@ pub enum SearchEvent {
     SubQueryStarted { idx: usize },
     SubQueryFinished { idx: usize, ok: bool },
     CallCosted { usage: EngineUsage },
+    EngineActivity { label: &'static str, target: String },
     SynthesisStarted,
     ReflectionStarted,
     ReflectionGaps { gaps: Vec<SubQuery> },

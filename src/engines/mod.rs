@@ -12,6 +12,8 @@ use std::pin::Pin;
 pub type BoxedEngineFuture<'a> =
     Pin<Box<dyn Future<Output = Result<EngineOutput, EngineError>> + Send + 'a>>;
 
+pub type ActivitySink = tokio::sync::mpsc::Sender<crate::core::stream::EngineActivity>;
+
 pub trait Engine: Send + Sync {
     fn name(&self) -> &str;
 
@@ -20,6 +22,15 @@ pub trait Engine: Send + Sync {
     }
 
     fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a>;
+
+    fn run_reporting<'a>(
+        &'a self,
+        job: &'a EngineJob,
+        activity: ActivitySink,
+    ) -> BoxedEngineFuture<'a> {
+        drop(activity);
+        self.run(job)
+    }
 }
 
 pub fn candidate_paths(bin: &str, path_var: &str) -> Vec<PathBuf> {

@@ -1,4 +1,5 @@
 use crate::core::cost::{EngineUsage, parse_usage};
+use crate::core::stream::result_line;
 use serde_json::Value;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -24,6 +25,7 @@ pub struct EngineSpec {
     pub name: &'static str,
     pub bin: &'static str,
     pub args: &'static [&'static str],
+    pub streams: bool,
     pub parse: ParseStrategy,
     pub supports_json_schema: bool,
     pub model_flag: Option<&'static str>,
@@ -31,6 +33,8 @@ pub struct EngineSpec {
     pub fast_model: Option<&'static str>,
     pub install_hint: &'static str,
 }
+
+pub const STREAM_FORMAT_ARG: &str = "stream-json";
 
 pub const ENGINES: &[EngineSpec] = &[
     EngineSpec {
@@ -40,9 +44,11 @@ pub const ENGINES: &[EngineSpec] = &[
         args: &[
             "-p",
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",
             "--allowedTools=WebSearch,WebFetch",
         ],
+        streams: true,
         parse: ParseStrategy::ClaudeJson,
         supports_json_schema: true,
         model_flag: Some("--model"),
@@ -55,6 +61,7 @@ pub const ENGINES: &[EngineSpec] = &[
         name: "cursor-agent",
         bin: "cursor-agent",
         args: &["-p", "--output-format", "json"],
+        streams: false,
         parse: ParseStrategy::GenericJson,
         supports_json_schema: false,
         model_flag: Some("--model"),
@@ -67,6 +74,7 @@ pub const ENGINES: &[EngineSpec] = &[
         name: "codex",
         bin: "codex",
         args: &["exec", "--skip-git-repo-check"],
+        streams: false,
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
         model_flag: Some("--model"),
@@ -79,6 +87,7 @@ pub const ENGINES: &[EngineSpec] = &[
         name: "opencode",
         bin: "opencode",
         args: &["run"],
+        streams: false,
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
         model_flag: Some("--model"),
@@ -191,14 +200,17 @@ fn envelope_usage(strategy: ParseStrategy, stdout: &str) -> Option<EngineUsage> 
     if strategy != ParseStrategy::ClaudeJson {
         return None;
     }
+    claude_envelope(stdout).as_ref().and_then(parse_usage)
+}
+
+fn claude_envelope(stdout: &str) -> Option<Value> {
     serde_json::from_str::<Value>(stdout.trim())
         .ok()
-        .as_ref()
-        .and_then(parse_usage)
+        .or_else(|| result_line(stdout).and_then(|line| serde_json::from_str::<Value>(line).ok()))
 }
 
 fn claude_envelope_text(stdout: &str) -> Result<String, EngineError> {
-    let Ok(envelope) = serde_json::from_str::<Value>(stdout.trim()) else {
+    let Some(envelope) = claude_envelope(stdout) else {
         return Ok(stdout.to_string());
     };
     if envelope.get("is_error").and_then(Value::as_bool) == Some(true) {
@@ -275,6 +287,73 @@ mod tests {
             assert_eq!(engine_by_name(spec.name).unwrap().id, spec.id);
             assert!(!spec.install_hint.is_empty(), "{}", spec.name);
         }
+    }
+
+    #[test]
+    fn only_engines_asking_for_a_line_stream_claim_to_stream() {
+        for spec in ENGINES {
+            assert_eq!(
+                spec.streams,
+                spec.args.contains(&STREAM_FORMAT_ARG),
+                "{}",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_streaming_claude_envelope_is_read_from_its_result_line() {
+        let stdout = concat!(
+            "{\"type\":\"system\",\"subtype\":\"init\"}\n",
+            "{\"type\":\"assistant\",\"message\":{\"content\":[]}}\n",
+            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,",
+            "\"result\":\"the payload\",\"total_cost_usd\":0.25,",
+            "\"usage\":{\"input_tokens\":10,\"output_tokens\":5}}\n"
+        );
+        let output = envelope_output(ParseStrategy::ClaudeJson, stdout).unwrap();
+        assert_eq!(output.text, "the payload");
+        assert_eq!(
+            output.usage,
+            Some(EngineUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+                cost_usd: 0.25,
+            })
+        );
+    }
+
+    #[test]
+    fn a_streaming_claude_error_still_surfaces_as_a_reported_error() {
+        let stdout = concat!(
+            "{\"type\":\"system\",\"subtype\":\"init\"}\n",
+            "{\"type\":\"result\",\"subtype\":\"error_during_execution\",",
+            "\"is_error\":true,\"result\":\"Credit balance is too low\"}\n"
+        );
+        let error = envelope_text(ParseStrategy::ClaudeJson, stdout).unwrap_err();
+        assert_eq!(
+            error,
+            EngineError::Reported("Credit balance is too low".to_string())
+        );
+    }
+
+    #[test]
+    fn a_streaming_claude_answer_still_prefers_structured_output() {
+        let stdout = concat!(
+            "{\"type\":\"assistant\",\"message\":{\"content\":[]}}\n",
+            "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,",
+            "\"result\":\"{\\\"title\\\":\\\"raw\\\"}\",",
+            "\"structured_output\":{\"title\":\"Structured\"}}\n"
+        );
+        let text = envelope_text(ParseStrategy::ClaudeJson, stdout).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["title"], "Structured");
+    }
+
+    #[test]
+    fn a_stream_that_never_reached_its_result_passes_through_raw() {
+        let stdout = "{\"type\":\"system\"}\n{\"type\":\"assistant\"}";
+        let text = envelope_text(ParseStrategy::ClaudeJson, stdout).unwrap();
+        assert_eq!(text, stdout);
     }
 
     #[test]

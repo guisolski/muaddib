@@ -110,6 +110,14 @@ Each sub-search prompt demands findings with exact URLs:
 figure) on the consulted page. A failed sub-query is dropped (with a `SubQueryFinished { ok: false }` event);
 the pipeline continues as long as at least one succeeds and produces findings.
 
+An engine whose `EngineSpec.streams` is set (only `claude` today) is read line by
+line rather than buffered to completion, so its own tool calls surface while the
+call is still running: `EngineActivity { label, target }` events report each
+`WebSearch` and `WebFetch` the engine makes (ADR-0015). They are cosmetic and
+sent with `try_send`, so a chatty engine is throttled by dropping lines rather
+than by stalling the pipeline. This applies to every stage's engine call, not
+just the fan-out.
+
 ### 5. Merge (pure)
 
 `merge_sub_results` deduplicates findings by *(normalized URL, normalized

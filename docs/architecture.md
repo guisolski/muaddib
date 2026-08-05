@@ -10,7 +10,7 @@ terminal.
 flowchart TB
     subgraph adapters [Adapters — I/O at the edges]
         TUI[tui/ — ratatui event loop and views]
-        ENG[engines/ — CLI subprocess execution]
+        ENG[engines/ — CLI subprocess execution, line streaming]
         VAL[pipeline/validate — HTTP link checks]
         WEB[pipeline/websearch — HTTP search grounding]
         PAGES[pipeline/pages — HTTP page-content grounding]
@@ -29,6 +29,7 @@ flowchart TB
         EXPORT[core/export — markdown, OSC 52]
         CRED[core/credibility — source classes]
         REFLECT[core/reflect — coverage gaps]
+        STREAM[core/stream — engine activity]
         CIT[core/citations — merge and renumber]
         WEBT[core/websearch — WEB_ENGINES table and parsers]
         RANK[core/rank — BM25 hit reranking]
@@ -45,6 +46,7 @@ flowchart TB
     PIPE --> core
     TUI --> core
     ENG --> core
+    ENG --> STREAM
     WEB --> WEBT
     WEB --> RANK
     PAGES --> READ
@@ -72,7 +74,8 @@ logic needs to be touched:
 | Table | Location | Drives |
 |---|---|---|
 | `MODES` | `core/mode.rs` | search modes, breadth, prompt instructions, reflection rounds |
-| `ENGINES` | `engines/mod.rs` | engine binaries, argv, parse strategy |
+| `ENGINES` | `core/engine.rs` | engine binaries, argv, streaming, parse strategy |
+| `STREAM_TOOLS` | `core/stream.rs` | engine tool calls narrated as activity |
 | `WEB_ENGINES` | `core/websearch.rs` | web/academic search engines, request shape, hit parsers |
 | `CONTENT_SELECTORS` / `NOISE_TAGS` | `core/readability.rs` | page-content extraction roots and excluded subtrees |
 | `EXTRACTORS` | `core/extract.rs` | JSON extraction strategies, tried in order |
@@ -135,7 +138,7 @@ src/
 ├── config_store.rs   config file resolution and persistence (MUADDIB_CONFIG, XDG)
 ├── history_store.rs  search history file: append, load, clear (MUADDIB_HISTORY, XDG state)
 ├── tree_store.rs     research session files: save, load (MUADDIB_SESSIONS, XDG state)
-├── core/             pure: mode, plan, prompts, extract, answer, citations, config, history, websearch, rank, readability, tree, context, reflect
+├── core/             pure: mode, plan, prompts, extract, answer, citations, config, history, websearch, rank, readability, tree, context, reflect, stream
 ├── engines/          EngineSpec table, Engine trait, CliEngine, output parsing
 ├── pipeline/         SearchEvent protocol, stage orchestration, web-search grounding, page fetching, link validation
 └── tui/              App state, reducer, keymap, theme, views, widgets

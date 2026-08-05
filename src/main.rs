@@ -250,6 +250,9 @@ fn report_progress(event: &SearchEvent) {
             let outcome = if *ok { "done" } else { "failed" };
             eprintln!("muaddib: sub-query {} {outcome}", idx + 1);
         }
+        SearchEvent::EngineActivity { label, target } => {
+            eprintln!("muaddib: {label} {target}");
+        }
         SearchEvent::SynthesisStarted => eprintln!("muaddib: synthesizing answer..."),
         SearchEvent::ReflectionStarted => eprintln!("muaddib: reviewing the draft..."),
         SearchEvent::ReflectionGaps { gaps } => {

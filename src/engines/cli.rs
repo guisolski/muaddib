@@ -1,9 +1,12 @@
 use crate::core::engine::{build_args, envelope_output};
+use crate::core::stream::activities_in;
 use crate::engines::{
-    BoxedEngineFuture, Engine, EngineError, EngineJob, EngineOutput, EngineSpec, EngineStatus,
+    ActivitySink, BoxedEngineFuture, Engine, EngineError, EngineJob, EngineOutput, EngineSpec,
+    EngineStatus,
 };
 use std::path::PathBuf;
 use std::process::Stdio;
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 
 pub struct CliEngine {
@@ -31,16 +34,41 @@ impl CliEngine {
         self
     }
 
-    async fn run_cli(&self, job: &EngineJob) -> Result<EngineOutput, EngineError> {
-        let output = tokio::time::timeout(job.timeout, self.command(job).output())
+    async fn run_cli(
+        &self,
+        job: &EngineJob,
+        activity: Option<ActivitySink>,
+    ) -> Result<EngineOutput, EngineError> {
+        let stdout = tokio::time::timeout(job.timeout, self.capture(job, activity))
             .await
-            .map_err(|_| EngineError::TimedOut(job.timeout))?
-            .map_err(|error| EngineError::Spawn(error.to_string()))?;
-        if !output.status.success() {
-            return Err(failure_from_output(&output));
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
+            .map_err(|_| EngineError::TimedOut(job.timeout))??;
         envelope_output(self.spec.parse, &stdout)
+    }
+
+    async fn capture(
+        &self,
+        job: &EngineJob,
+        activity: Option<ActivitySink>,
+    ) -> Result<String, EngineError> {
+        let mut child = self
+            .command(job)
+            .spawn()
+            .map_err(|error| EngineError::Spawn(error.to_string()))?;
+        let stdout = child.stdout.take().expect("stdout is piped");
+        let stderr = child.stderr.take().expect("stderr is piped");
+        let narrate = self.spec.streams.then_some(activity).flatten();
+        let (stdout, stderr) = tokio::join!(read_stdout(stdout, narrate), read_all(stderr));
+        let status = child
+            .wait()
+            .await
+            .map_err(|error| EngineError::Spawn(error.to_string()))?;
+        if !status.success() {
+            return Err(EngineError::Failed {
+                status: status.code().unwrap_or(-1),
+                stderr_tail: tail(&stderr, 400),
+            });
+        }
+        Ok(stdout)
     }
 
     fn command(&self, job: &EngineJob) -> Command {
@@ -65,16 +93,39 @@ impl Engine for CliEngine {
     }
 
     fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a> {
-        Box::pin(self.run_cli(job))
+        Box::pin(self.run_cli(job, None))
+    }
+
+    fn run_reporting<'a>(
+        &'a self,
+        job: &'a EngineJob,
+        activity: ActivitySink,
+    ) -> BoxedEngineFuture<'a> {
+        Box::pin(self.run_cli(job, Some(activity)))
     }
 }
 
-fn failure_from_output(output: &std::process::Output) -> EngineError {
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    EngineError::Failed {
-        status: output.status.code().unwrap_or(-1),
-        stderr_tail: tail(&stderr, 400),
+async fn read_stdout<R: AsyncRead + Unpin>(reader: R, activity: Option<ActivitySink>) -> String {
+    let Some(sink) = activity else {
+        return read_all(reader).await;
+    };
+    let mut lines = BufReader::new(reader).lines();
+    let mut collected = String::new();
+    while let Ok(Some(line)) = lines.next_line().await {
+        for reported in activities_in(&line) {
+            let _ = sink.try_send(reported);
+        }
+        collected.push_str(&line);
+        collected.push('\n');
     }
+    collected
+}
+
+async fn read_all<R: AsyncRead + Unpin>(reader: R) -> String {
+    let mut buffer = Vec::new();
+    let mut reader = BufReader::new(reader);
+    let _ = tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut buffer).await;
+    String::from_utf8_lossy(&buffer).into_owned()
 }
 
 fn tail(text: &str, max_chars: usize) -> String {
@@ -90,6 +141,7 @@ fn tail(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::core::engine::ParseStrategy;
+    use crate::core::stream::EngineActivity;
     use crate::engines::EngineId;
     use std::time::Duration;
 
@@ -98,6 +150,7 @@ mod tests {
         name: "echo-fake",
         bin: "echo",
         args: &[],
+        streams: false,
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
         model_flag: None,
@@ -111,6 +164,7 @@ mod tests {
         name: "failing-fake",
         bin: "sh",
         args: &["-c", "echo boom >&2; exit 3"],
+        streams: false,
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
         model_flag: None,
@@ -124,6 +178,7 @@ mod tests {
         name: "sleeping-fake",
         bin: "sh",
         args: &["-c", "sleep 5"],
+        streams: false,
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
         model_flag: None,
@@ -152,6 +207,7 @@ mod tests {
         name: "model-echo-fake",
         bin: "echo",
         args: &[],
+        streams: false,
         parse: ParseStrategy::RawText,
         supports_json_schema: false,
         model_flag: Some("--model"),
@@ -193,6 +249,100 @@ mod tests {
         let engine = CliEngine::new(&ECHO_SPEC, PathBuf::from("/nonexistent/binary"));
         let error = engine.run(&job("ignored", 5_000)).await.unwrap_err();
         assert!(matches!(error, EngineError::Spawn(_)));
+    }
+
+    const STREAM_LINES: &str = concat!(
+        "{\"type\":\"system\",\"subtype\":\"init\"}\n",
+        "{\"type\":\"assistant\",\"message\":{\"content\":",
+        "[{\"type\":\"tool_use\",\"name\":\"WebSearch\",\"input\":{\"query\":\"rust async\"}}]}}\n",
+        "{\"type\":\"assistant\",\"message\":{\"content\":",
+        "[{\"type\":\"tool_use\",\"name\":\"WebFetch\",\"input\":{\"url\":\"https://a.example\"}}]}}\n",
+        "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"done\"}\n"
+    );
+
+    const STREAMING_SPEC: EngineSpec = EngineSpec {
+        id: EngineId::Claude,
+        name: "streaming-fake",
+        bin: "sh",
+        args: &["-c"],
+        streams: true,
+        parse: ParseStrategy::ClaudeJson,
+        supports_json_schema: false,
+        model_flag: None,
+        models: &[],
+        fast_model: None,
+        install_hint: "",
+    };
+
+    const QUIET_SPEC: EngineSpec = EngineSpec {
+        id: EngineId::Claude,
+        name: "quiet-fake",
+        bin: "sh",
+        args: &["-c"],
+        streams: false,
+        parse: ParseStrategy::ClaudeJson,
+        supports_json_schema: false,
+        model_flag: None,
+        models: &[],
+        fast_model: None,
+        install_hint: "",
+    };
+
+    async fn drain_activity(
+        spec: &'static EngineSpec,
+    ) -> (Result<EngineOutput, EngineError>, Vec<EngineActivity>) {
+        let engine = CliEngine::new(spec, PathBuf::from("/bin/sh"));
+        let (activity_tx, mut activity_rx) = tokio::sync::mpsc::channel(16);
+        let script = format!("printf '%s' '{STREAM_LINES}'");
+        let job = job(&script, 5_000);
+        let collect = async {
+            let mut seen = Vec::new();
+            while let Some(reported) = activity_rx.recv().await {
+                seen.push(reported);
+            }
+            seen
+        };
+        let (result, seen) = tokio::join!(engine.run_reporting(&job, activity_tx), collect);
+        (result, seen)
+    }
+
+    #[tokio::test]
+    async fn a_streaming_engine_narrates_its_tool_calls_and_still_returns_the_envelope() {
+        let (result, seen) = drain_activity(&STREAMING_SPEC).await;
+        assert_eq!(result.unwrap().text, "done");
+        assert_eq!(
+            seen,
+            vec![
+                EngineActivity {
+                    label: "searching",
+                    target: "rust async".to_string(),
+                },
+                EngineActivity {
+                    label: "reading",
+                    target: "https://a.example".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_engine_that_does_not_stream_narrates_nothing() {
+        let (result, seen) = drain_activity(&QUIET_SPEC).await;
+        assert_eq!(result.unwrap().text, "done");
+        assert!(seen.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_full_activity_channel_drops_lines_instead_of_stalling_the_engine() {
+        let engine = CliEngine::new(&STREAMING_SPEC, PathBuf::from("/bin/sh"));
+        let (activity_tx, activity_rx) = tokio::sync::mpsc::channel(1);
+        let script = format!("printf '%s' '{}'", STREAM_LINES.repeat(20));
+        let output = engine
+            .run_reporting(&job(&script, 5_000), activity_tx)
+            .await
+            .unwrap();
+        assert_eq!(output.text, "done");
+        drop(activity_rx);
     }
 
     #[test]

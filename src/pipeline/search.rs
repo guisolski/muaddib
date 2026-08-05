@@ -17,6 +17,7 @@ use crate::core::prompts::{
 };
 use crate::core::readability::PageText;
 use crate::core::reflect::{MAX_REFLECTION_GAPS, gaps_from_reflection, reflection_timeout};
+use crate::core::stream::EngineActivity;
 use crate::core::websearch::{WebHit, allowed_urls_with_hits, snippet_sub_results};
 use crate::engines::{Engine, EngineError, EngineJob, EngineOutput};
 use crate::pipeline::websearch::{WebFetcher, default_fetcher, websearch_stage};
@@ -29,6 +30,7 @@ use tokio::sync::mpsc;
 pub const EXPANSION_TIMEOUT: Duration = Duration::from_secs(45);
 pub const FAST_TARGET_SECS: u64 = 5;
 const EVENT_BUFFER: usize = 64;
+const ACTIVITY_BUFFER: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct SearchRequest {
@@ -353,13 +355,29 @@ async fn run_reporting_usage(
     job: &EngineJob,
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Result<EngineOutput, EngineError> {
-    let result = engine.run(job).await;
+    let (activity_tx, activity_rx) = mpsc::channel(ACTIVITY_BUFFER);
+    let (result, ()) = tokio::join!(
+        engine.run_reporting(job, activity_tx),
+        forward_activity(activity_rx, tx)
+    );
     if let Ok(output) = &result
         && let Some(usage) = output.usage
     {
         send(tx, SearchEvent::CallCosted { usage }).await;
     }
     result
+}
+
+async fn forward_activity(
+    mut activity: mpsc::Receiver<EngineActivity>,
+    tx: &mpsc::Sender<SearchEvent>,
+) {
+    while let Some(reported) = activity.recv().await {
+        let _ = tx.try_send(SearchEvent::EngineActivity {
+            label: reported.label,
+            target: reported.target,
+        });
+    }
 }
 
 async fn expansion_stage(
@@ -1206,6 +1224,75 @@ mod tests {
             !events
                 .iter()
                 .any(|event| matches!(event, SearchEvent::WebHits { .. }))
+        );
+    }
+
+    struct NarratingEngine {
+        activities: Vec<EngineActivity>,
+    }
+
+    impl Engine for NarratingEngine {
+        fn name(&self) -> &'static str {
+            "narrating"
+        }
+
+        fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a> {
+            Box::pin(async move {
+                Ok(EngineOutput::from_text(
+                    FakeEngine::reliable().canned_response(marker_of(&job.prompt)),
+                ))
+            })
+        }
+
+        fn run_reporting<'a>(
+            &'a self,
+            job: &'a EngineJob,
+            activity: crate::engines::ActivitySink,
+        ) -> BoxedEngineFuture<'a> {
+            Box::pin(async move {
+                for reported in &self.activities {
+                    let _ = activity.try_send(reported.clone());
+                }
+                drop(activity);
+                self.run(job).await
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn what_the_engine_reports_doing_reaches_the_event_stream() {
+        let engine = Arc::new(NarratingEngine {
+            activities: vec![EngineActivity {
+                label: "searching",
+                target: "rust async".to_string(),
+            }],
+        });
+        let (tx, mut events) = mpsc::channel(EVENT_BUFFER);
+        let task = tokio::spawn(run_search(engine, Arc::new(NoopWebFetcher), request(), tx));
+        let mut seen = Vec::new();
+        while let Some(event) = events.recv().await {
+            seen.push(event);
+        }
+        task.await.unwrap();
+        let narrated: Vec<&str> = seen
+            .iter()
+            .filter_map(|event| match event {
+                SearchEvent::EngineActivity { target, .. } => Some(target.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(narrated.len(), 5);
+        assert!(narrated.iter().all(|target| *target == "rust async"));
+        assert!(matches!(seen.last(), Some(SearchEvent::Completed)));
+    }
+
+    #[tokio::test]
+    async fn an_engine_that_narrates_nothing_produces_no_activity_events() {
+        let events = collect_events(FakeEngine::reliable()).await;
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::EngineActivity { .. }))
         );
     }
 

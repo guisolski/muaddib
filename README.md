@@ -95,6 +95,8 @@ instinct) — the mouse kept the nose.
 - Follow-up searches that build a navigable research tree: branch from any
   answer with `f`, explore with `t`, save the session with `s`, reopen with
   `--session <file>`
+- Live progress: while a call runs, the searches and page fetches the engine
+  makes are streamed and shown as they happen, instead of a spinner over silence
 - Fast mode (`Ctrl+F` / `--fast`): one engine call instead of three, with a small
   model and a trimmed answer schema — ~5x faster on real queries (31s vs 166s
   measured on `claude`+`haiku`), and combines with any search mode

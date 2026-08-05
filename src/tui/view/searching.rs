@@ -1,3 +1,4 @@
+use crate::core::stream::EngineActivity;
 use crate::pipeline::search::FAST_TARGET_SECS;
 use crate::tui::app::App;
 use crate::tui::search_state::{SearchState, SubQueryState};
@@ -45,6 +46,7 @@ fn panel_lines(app: &App, include_mascot: bool, width: usize) -> Vec<Line<'stati
     lines.push(Line::from(header));
     lines.push(Line::default());
     lines.extend(sub_query_lines(app));
+    lines.extend(activity_lines(app, width));
     if let Some(count) = app.search.web_hits {
         lines.push(Line::styled(format!("web hits: {count}"), theme::dim()));
     }
@@ -58,6 +60,23 @@ fn panel_lines(app: &App, include_mascot: bool, width: usize) -> Vec<Line<'stati
     lines.push(Line::default());
     lines.push(Line::styled("Esc cancel", theme::dim()));
     lines
+}
+
+fn activity_lines(app: &App, width: usize) -> Vec<Line<'static>> {
+    app.search
+        .activity
+        .iter()
+        .map(|reported| Line::styled(activity_text(reported, width), theme::dim()))
+        .collect()
+}
+
+fn activity_text(reported: &EngineActivity, width: usize) -> String {
+    let full = format!("  ↳ {} {}", reported.label, reported.target);
+    if full.chars().count() <= width {
+        return full;
+    }
+    let kept: String = full.chars().take(width.saturating_sub(1)).collect();
+    format!("{kept}…")
 }
 
 fn stage_lines(app: &App) -> Vec<Line<'static>> {
@@ -138,6 +157,45 @@ fn state_glyph(state: SubQueryState, tick: u64) -> Span<'static> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_activity_line_never_outgrows_the_panel() {
+        struct Case {
+            name: &'static str,
+            target: &'static str,
+            width: usize,
+            want: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "a short target is shown whole",
+                target: "rust async",
+                width: 40,
+                want: "  ↳ searching rust async",
+            },
+            Case {
+                name: "a long target is cut to the panel width",
+                target: "https://example.com/a/very/long/path/that/keeps/going",
+                width: 24,
+                want: "  ↳ searching https://e…",
+            },
+            Case {
+                name: "an absurdly narrow panel still yields something",
+                target: "anything",
+                width: 1,
+                want: "…",
+            },
+        ];
+        for case in cases {
+            let reported = EngineActivity {
+                label: "searching",
+                target: case.target.to_string(),
+            };
+            let text = activity_text(&reported, case.width);
+            assert_eq!(text, case.want, "{}", case.name);
+            assert!(text.chars().count() <= case.width.max(1), "{}", case.name);
+        }
+    }
 
     #[test]
     fn the_stage_line_names_whichever_stage_is_running() {

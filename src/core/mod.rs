@@ -15,5 +15,6 @@ pub mod prompts;
 pub mod rank;
 pub mod readability;
 pub mod reflect;
+pub mod stream;
 pub mod tree;
 pub mod websearch;
