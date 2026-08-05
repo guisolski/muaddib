@@ -138,10 +138,12 @@ to the first available engine automatically.
 
 ## Install
 
-**Homebrew** (macOS, Linux):
+**Homebrew** (macOS, Linux) — the formula lives in this repository, so the tap points
+straight at it:
 
 ```sh
-brew install guisolski/muaddib/muaddib
+brew tap guisolski/muaddib https://github.com/guisolski/muaddib
+brew install muaddib
 ```
 
 **Install script** (macOS, Linux — downloads the prebuilt binary and verifies its checksum):
