@@ -37,6 +37,12 @@ repos:
         entry: python3 scripts/check_no_comments.py
         language: system
         types: [rust]
+      - id: sync-msrv
+        name: sync the msrv in the readme with Cargo.toml
+        entry: python3 scripts/sync_msrv.py
+        language: system
+        files: ^(README\.md|Cargo\.toml)$
+        pass_filenames: false
       - id: cargo-fmt
         name: cargo fmt check
         entry: cargo fmt --all -- --check
