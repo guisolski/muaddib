@@ -120,7 +120,13 @@ discarded here — they could never be cited.
 ### 6. Synthesize
 
 One final engine call receives the merged findings as JSON plus the answer
-schema (`core/answer.rs::ANSWER_SCHEMA` — via `--json-schema` on claude,
+schema. Its timeout is **not** the flat `engine_timeout_secs`: synthesis is the one
+call whose input grows with the plan, so `synthesis_timeout` multiplies the base
+budget by one unit per three sub-queries, capped at 3×. A `Deep` search (breadth 6)
+therefore gets 360s where a `General` one gets 180s. The first evaluation run found
+this the hard way — `Deep` reliably timed out at a flat 180s while every narrower
+mode fit comfortably. Sub-searches keep the flat budget: each one is the same size
+regardless of how many there are (`core/answer.rs::ANSWER_SCHEMA` — via `--json-schema` on claude,
 inlined in the prompt otherwise) and the instruction to answer entirely in the
 configured language, citing `source_ids` on every block, using **only** URLs
 present in the findings. The prompt favors compact visual blocks — short

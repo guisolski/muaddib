@@ -8,7 +8,7 @@ use crate::core::context::{ResearchContext, context_allowed_urls};
 use crate::core::extract::extract_json;
 use crate::core::mode::{Mode, ModeSpec};
 use crate::core::plan::{
-    SearchPlan, SubQuery, effective_breadth, literal_plan, plan_from_expansion,
+    SearchPlan, SubQuery, effective_breadth, literal_plan, plan_from_expansion, synthesis_timeout,
 };
 use crate::core::prompts::{expansion_prompt, fast_prompt, sub_search_prompt, synthesis_prompt};
 use crate::core::readability::PageText;
@@ -323,7 +323,7 @@ async fn synthesis_stage(
     let job = EngineJob {
         prompt: synthesis_prompt(plan, merged, inline_schema, &request.context),
         schema: Some(ANSWER_SCHEMA),
-        timeout: request.engine_timeout,
+        timeout: synthesis_timeout(request.engine_timeout, plan.sub_queries.len()),
     };
     let output = run_reporting_usage(engine, &job, tx)
         .await

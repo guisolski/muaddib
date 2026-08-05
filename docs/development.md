@@ -93,6 +93,12 @@ to prompts, `ANSWER_SCHEMA`, or the grounding stages.
 
 CI never runs this — it needs a real CLI, real money, and real time.
 
+> **It is not cheap.** The first recorded run took **20 minutes and $5.32** for five
+> queries against `claude` on its default model. Roughly a dollar per query, and the
+> Scientific case alone took 5.5 minutes. Budget for it; do not wire it into a watch
+> loop. Setting `[engines.claude] model = "haiku"` for the run trades some answer
+> quality for a much smaller bill.
+
 ## Live testing
 
 The one thing CI cannot cover — a real AI CLI:

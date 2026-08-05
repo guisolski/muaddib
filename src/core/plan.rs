@@ -2,6 +2,7 @@ use crate::core::config::{MAX_BREADTH, MODE_DEFAULT_BREADTH};
 use crate::core::mode::Mode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -35,6 +36,20 @@ pub fn effective_breadth(mode: Mode, override_breadth: u8) -> u8 {
     } else {
         override_breadth.clamp(1, MAX_BREADTH)
     }
+}
+
+pub const SUB_QUERIES_PER_TIMEOUT_UNIT: usize = 3;
+pub const MAX_SYNTHESIS_SCALE: u32 = 3;
+
+pub fn synthesis_scale(sub_queries: usize) -> u32 {
+    let units = sub_queries.div_ceil(SUB_QUERIES_PER_TIMEOUT_UNIT).max(1);
+    u32::try_from(units)
+        .unwrap_or(MAX_SYNTHESIS_SCALE)
+        .min(MAX_SYNTHESIS_SCALE)
+}
+
+pub fn synthesis_timeout(base: Duration, sub_queries: usize) -> Duration {
+    base.saturating_mul(synthesis_scale(sub_queries))
 }
 
 pub fn literal_plan(original: &str, mode: Mode, answer_lang: &str) -> SearchPlan {
@@ -169,6 +184,61 @@ pub fn fallback_expansion(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn synthesis_timeout_grows_with_the_findings_it_has_to_read() {
+        struct Case {
+            name: &'static str,
+            sub_queries: usize,
+            want_secs: u64,
+        }
+        let base = Duration::from_secs(180);
+        let cases = [
+            Case {
+                name: "a simple rating keeps the base budget",
+                sub_queries: 1,
+                want_secs: 180,
+            },
+            Case {
+                name: "general breadth keeps the base budget",
+                sub_queries: 3,
+                want_secs: 180,
+            },
+            Case {
+                name: "scientific breadth buys a second unit",
+                sub_queries: 4,
+                want_secs: 360,
+            },
+            Case {
+                name: "deep breadth buys a second unit",
+                sub_queries: 6,
+                want_secs: 360,
+            },
+            Case {
+                name: "the maximum breadth buys a third",
+                sub_queries: 8,
+                want_secs: 540,
+            },
+            Case {
+                name: "the scale is capped so a bad plan cannot hang forever",
+                sub_queries: 100,
+                want_secs: 540,
+            },
+            Case {
+                name: "an empty plan still gets a budget",
+                sub_queries: 0,
+                want_secs: 180,
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                synthesis_timeout(base, case.sub_queries),
+                Duration::from_secs(case.want_secs),
+                "{}",
+                case.name
+            );
+        }
+    }
 
     #[test]
     fn effective_breadth_uses_mode_default_when_zero() {

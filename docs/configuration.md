@@ -64,7 +64,7 @@ expansion_breadth = 0       # 0 = use the mode default, otherwise clamped to 1..
 validate_links = true       # HTTP HEAD validation of every source
 images = true               # fetch and render answer images in the terminal
 animations = true           # staggered block reveal, chart growth, jump pulses
-engine_timeout_secs = 180   # per engine call
+engine_timeout_secs = 180   # per engine call; synthesis scales this with plan size
 fast_timeout_secs = 45      # hard ceiling for the single fast-mode call, clamped to 5..=120
 
 [websearch]                 # built-in web-search grounding (ADR-0007)
