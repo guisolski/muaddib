@@ -1,0 +1,14 @@
+{
+  "gaps": [
+    {
+      "query": "rust async runtime scheduler latency measurements",
+      "lang": "en",
+      "rationale": "the draft claims Tokio is faster without any measured number behind it"
+    },
+    {
+      "query": "rust async runtimes comparison",
+      "lang": "en",
+      "rationale": "already searched, so the pipeline must drop this one"
+    }
+  ]
+}

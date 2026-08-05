@@ -8,6 +8,7 @@ for arg in "$@"; do
     *"MUADDIB:SUBSEARCH"*) marker="subsearch" ;;
     *"MUADDIB:SYNTH"*) marker="synthesis" ;;
     *"MUADDIB:FAST"*) marker="fast" ;;
+    *"MUADDIB:REFLECT"*) marker="reflection" ;;
   esac
 done
 if [ -z "$marker" ]; then

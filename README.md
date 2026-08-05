@@ -42,7 +42,7 @@ instinct) — the mouse kept the nose.
                 ╭──────────────────────────────────────╮
                 │ why is the sky blue?                 │
                 ╰──────────────────────────────────────╯
-         General · Scientific · News · Code · Forums · Deep
+      General·Scientific·News·Code·Forums·Deep·Exhaustive
                              ⚡ fast
 
                         claude ● · default · pt-BR
@@ -65,8 +65,8 @@ instinct) — the mouse kept the nose.
   against conventional search engines (DuckDuckGo, Bing, Mojeek) and — in
   Scientific mode — scholarly APIs (OpenAlex, Crossref, Semantic Scholar). The
   pooled hits are reranked with BM25, handed to the AI as candidate sources to
-  verify and cite, and in Scientific and Deep modes the top pages are fetched
-  and their readable text fed to the searches.
+  verify and cite, and in the Scientific, Deep, and Exhaustive modes the top pages
+  are fetched and their readable text fed to the searches.
 - **Research grows as a tree.** Ask a follow-up (`f`) and it branches from the
   answer you are reading, carrying the questions, answers, and sources of the
   path so far into the next search. Navigate the tree (`t`), revisit any node,
@@ -78,17 +78,20 @@ instinct) — the mouse kept the nose.
 
 ## Features
 
-- Minimalist TUI: one centered search bar, six focus modes (`General`, `Scientific`,
-  `News`, `Code`, `Forums`, `Deep`) — `Code` biases the web search toward
+- Minimalist TUI: one centered search bar, seven focus modes (`General`, `Scientific`,
+  `News`, `Code`, `Forums`, `Deep`, `Exhaustive`) — `Code` biases the web search toward
   documentation and repositories, `Forums` toward what practitioners actually report
 - Multilingual query expansion with a deterministic offline fallback
 - Built-in web-search grounding, in-binary and keyless: candidate results from
   DuckDuckGo, Bing, and Mojeek — plus OpenAlex, Crossref, and Semantic Scholar in
   Scientific mode — are BM25-reranked, then verified and cited by the AI;
   degrades silently and can be disabled with `--no-websearch`
-- Page-content grounding in Scientific and Deep modes: the top hits' pages are
-  fetched and boiled down to readable text that grounds each sub-search
-  (`[websearch] ground_modes`)
+- Page-content grounding in the Scientific, Deep, and Exhaustive modes: the top
+  hits' pages are fetched and boiled down to readable text that grounds each
+  sub-search (`[websearch] ground_modes`)
+- `Exhaustive` mode adds a reflection round: a critic reads the draft answer back,
+  names the gaps a further search could close, searches only those, and
+  re-synthesizes — and ships the draft untouched if any of that fails
 - Follow-up searches that build a navigable research tree: branch from any
   answer with `f`, explore with `t`, save the session with `s`, reopen with
   `--session <file>`

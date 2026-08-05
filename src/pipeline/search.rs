@@ -6,13 +6,17 @@ use crate::core::citations::{
 use crate::core::config::{Config, WebSearchConfig};
 use crate::core::context::{ResearchContext, context_allowed_urls};
 use crate::core::credibility::annotate_sources;
+use crate::core::export::{ExportContext, to_markdown};
 use crate::core::extract::extract_json;
 use crate::core::mode::{Mode, ModeSpec};
 use crate::core::plan::{
     SearchPlan, SubQuery, effective_breadth, literal_plan, plan_from_expansion, synthesis_timeout,
 };
-use crate::core::prompts::{expansion_prompt, fast_prompt, sub_search_prompt, synthesis_prompt};
+use crate::core::prompts::{
+    expansion_prompt, fast_prompt, reflection_prompt, sub_search_prompt, synthesis_prompt,
+};
 use crate::core::readability::PageText;
+use crate::core::reflect::{MAX_REFLECTION_GAPS, gaps_from_reflection, reflection_timeout};
 use crate::core::websearch::{WebHit, allowed_urls_with_hits, snippet_sub_results};
 use crate::engines::{Engine, EngineError, EngineJob, EngineOutput};
 use crate::pipeline::websearch::{WebFetcher, default_fetcher, websearch_stage};
@@ -95,6 +99,24 @@ async fn send(tx: &mpsc::Sender<SearchEvent>, event: SearchEvent) {
     let _ = tx.send(event).await;
 }
 
+struct Research {
+    plan: SearchPlan,
+    hits: Vec<Vec<WebHit>>,
+    sub_results: Vec<SubResult>,
+}
+
+impl Research {
+    fn flat_hits(&self) -> Vec<WebHit> {
+        self.hits.iter().flatten().cloned().collect()
+    }
+
+    fn extend(&mut self, gaps: &[SubQuery], hits: Vec<Vec<WebHit>>, results: Vec<SubResult>) {
+        self.plan.sub_queries.extend_from_slice(gaps);
+        self.hits.extend(hits);
+        self.sub_results.extend(results);
+    }
+}
+
 async fn run_stages(
     engine: &dyn Engine,
     fetcher: &dyn WebFetcher,
@@ -106,23 +128,155 @@ async fn run_stages(
     }
     let plan = expansion_stage(engine, request, tx).await;
     send(tx, SearchEvent::PlanReady(plan.clone())).await;
-    let hits = websearch_stage(fetcher, &plan, &request.websearch, tx).await;
-    let pages = page_grounding_stage(fetcher, &plan, &hits, &request.websearch, tx).await;
-    let sub_results = fanout_stage(engine, &plan, &hits, &pages, request, tx).await;
-    if sub_results.is_empty() {
+    let mut research = gather_stage(engine, fetcher, plan, 0, request, tx).await;
+    if research.sub_results.is_empty() {
         return Err("every sub-query failed; nothing to synthesize".to_string());
     }
-    let merged = merged_findings(&sub_results, &plan, &hits, request);
-    if merged.findings.is_empty() {
-        return Err("the searches produced no findings with usable sources".to_string());
-    }
-    send(tx, SearchEvent::SynthesisStarted).await;
-    let all_hits: Vec<WebHit> = hits.into_iter().flatten().collect();
-    let answer = synthesis_stage(engine, &plan, &merged, &all_hits, request, tx).await?;
+    let answer = compose_stage(engine, fetcher, &mut research, request, tx).await?;
     send(tx, SearchEvent::AnswerReady(Box::new(answer.clone()))).await;
     link_validation_stage(&answer, request, tx).await;
     image_fetch_stage(&answer, request, tx).await;
     Ok(())
+}
+
+async fn gather_stage(
+    engine: &dyn Engine,
+    fetcher: &dyn WebFetcher,
+    plan: SearchPlan,
+    offset: usize,
+    request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> Research {
+    let hits = websearch_stage(fetcher, &plan, &request.websearch, tx).await;
+    let pages = page_grounding_stage(fetcher, &plan, &hits, &request.websearch, tx).await;
+    let sub_results = fanout_stage(engine, &plan, &hits, &pages, offset, request, tx).await;
+    Research {
+        plan,
+        hits,
+        sub_results,
+    }
+}
+
+async fn compose_stage(
+    engine: &dyn Engine,
+    fetcher: &dyn WebFetcher,
+    research: &mut Research,
+    request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> Result<Answer, String> {
+    let merged = merged_findings(
+        &research.sub_results,
+        &research.plan,
+        &research.hits,
+        request,
+    );
+    if merged.findings.is_empty() {
+        return Err("the searches produced no findings with usable sources".to_string());
+    }
+    send(tx, SearchEvent::SynthesisStarted).await;
+    let draft = synthesis_stage(
+        engine,
+        &research.plan,
+        &merged,
+        &research.flat_hits(),
+        request,
+        tx,
+    )
+    .await?;
+    Ok(
+        reflection_stage(engine, fetcher, research, &draft, request, tx)
+            .await
+            .unwrap_or(draft),
+    )
+}
+
+async fn reflection_stage(
+    engine: &dyn Engine,
+    fetcher: &dyn WebFetcher,
+    research: &mut Research,
+    draft: &Answer,
+    request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> Option<Answer> {
+    if research.plan.mode.spec().reflect_rounds == 0 {
+        return None;
+    }
+    let budget = reflection_timeout(request.engine_timeout, research.plan.sub_queries.len());
+    tokio::time::timeout(
+        budget,
+        reflect_once(engine, fetcher, research, draft, request, tx),
+    )
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn reflect_once(
+    engine: &dyn Engine,
+    fetcher: &dyn WebFetcher,
+    research: &mut Research,
+    draft: &Answer,
+    request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> Option<Answer> {
+    send(tx, SearchEvent::ReflectionStarted).await;
+    let gaps = critique_stage(engine, &research.plan, draft, request, tx).await;
+    send(tx, SearchEvent::ReflectionGaps { gaps: gaps.clone() }).await;
+    if gaps.is_empty() {
+        return None;
+    }
+    let offset = research.plan.sub_queries.len();
+    let gap_plan = SearchPlan {
+        sub_queries: gaps,
+        ..research.plan.clone()
+    };
+    let found = gather_stage(engine, fetcher, gap_plan, offset, request, tx).await;
+    if found.sub_results.is_empty() {
+        return None;
+    }
+    research.extend(&found.plan.sub_queries, found.hits, found.sub_results);
+    let merged = merged_findings(
+        &research.sub_results,
+        &research.plan,
+        &research.hits,
+        request,
+    );
+    send(tx, SearchEvent::SynthesisStarted).await;
+    synthesis_stage(
+        engine,
+        &research.plan,
+        &merged,
+        &research.flat_hits(),
+        request,
+        tx,
+    )
+    .await
+    .ok()
+}
+
+async fn critique_stage(
+    engine: &dyn Engine,
+    plan: &SearchPlan,
+    draft: &Answer,
+    request: &SearchRequest,
+    tx: &mpsc::Sender<SearchEvent>,
+) -> Vec<SubQuery> {
+    let context = ExportContext {
+        query: plan.original.clone(),
+        mode: plan.mode,
+    };
+    let job = EngineJob {
+        prompt: reflection_prompt(plan, &to_markdown(draft, &context), MAX_REFLECTION_GAPS),
+        schema: None,
+        timeout: synthesis_timeout(request.engine_timeout, plan.sub_queries.len()),
+    };
+    let Ok(output) = run_reporting_usage(engine, &job, tx).await else {
+        return Vec::new();
+    };
+    let Some(value) = extract_json(&output.text) else {
+        return Vec::new();
+    };
+    gaps_from_reflection(&value, &plan.sub_queries, &plan.answer_lang)
 }
 
 fn merged_findings(
@@ -249,6 +403,7 @@ async fn fanout_stage(
     plan: &SearchPlan,
     hits: &[Vec<WebHit>],
     pages: &[Vec<PageText>],
+    offset: usize,
     request: &SearchRequest,
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Vec<SubResult> {
@@ -263,7 +418,7 @@ async fn fanout_stage(
                 hits: hits.get(idx).map_or(&[][..], Vec::as_slice),
                 pages: pages.get(idx).map_or(&[][..], Vec::as_slice),
             };
-            track_sub_query(engine, idx, grounded, mode_spec, request, tx)
+            track_sub_query(engine, offset + idx, grounded, mode_spec, request, tx)
         })
         .collect();
     stream::iter(sub_query_futures)
@@ -405,7 +560,7 @@ async fn image_fetch_stage(
 mod tests {
     use super::*;
     use crate::core::prompts::{
-        EXPANSION_MARKER, FAST_MARKER, SUB_SEARCH_MARKER, SYNTHESIS_MARKER,
+        EXPANSION_MARKER, FAST_MARKER, REFLECTION_MARKER, SUB_SEARCH_MARKER, SYNTHESIS_MARKER,
     };
     use crate::core::websearch::WebHit;
     use crate::engines::{BoxedEngineFuture, EngineError, EngineOutput};
@@ -416,6 +571,8 @@ mod tests {
     struct FakeEngine {
         fail_markers: Vec<&'static str>,
         simple_expansion: bool,
+        no_gaps: bool,
+        slow_markers: Vec<&'static str>,
         calls: AtomicUsize,
         prompts: Mutex<Vec<String>>,
     }
@@ -425,6 +582,8 @@ mod tests {
             Self {
                 fail_markers: vec![],
                 simple_expansion: false,
+                no_gaps: false,
+                slow_markers: vec![],
                 calls: AtomicUsize::new(0),
                 prompts: Mutex::new(Vec::new()),
             }
@@ -433,6 +592,20 @@ mod tests {
         fn failing_on(markers: &[&'static str]) -> Self {
             Self {
                 fail_markers: markers.to_vec(),
+                ..Self::reliable()
+            }
+        }
+
+        fn stalling_on(markers: &[&'static str]) -> Self {
+            Self {
+                slow_markers: markers.to_vec(),
+                ..Self::reliable()
+            }
+        }
+
+        fn finding_no_gaps() -> Self {
+            Self {
+                no_gaps: true,
                 ..Self::reliable()
             }
         }
@@ -503,6 +676,12 @@ mod tests {
                     "followups":["next question"]
                 }"#
                 .to_string(),
+                REFLECTION_MARKER if self.no_gaps => r#"{"gaps":[]}"#.to_string(),
+                REFLECTION_MARKER => r#"{"gaps":[
+                    {"query":"topic overview","lang":"en","rationale":"already searched"},
+                    {"query":"missing numbers","lang":"en","rationale":"no figures in the draft"}
+                ]}"#
+                .to_string(),
                 _ => panic!("prompt carries no known marker"),
             }
         }
@@ -514,6 +693,7 @@ mod tests {
             SUB_SEARCH_MARKER,
             SYNTHESIS_MARKER,
             FAST_MARKER,
+            REFLECTION_MARKER,
         ]
         .into_iter()
         .find(|marker| prompt.contains(marker))
@@ -532,6 +712,9 @@ mod tests {
                 let marker = marker_of(&job.prompt);
                 if self.fail_markers.contains(&marker) {
                     return Err(EngineError::Reported(format!("forced failure: {marker}")));
+                }
+                if self.slow_markers.contains(&marker) {
+                    tokio::time::sleep(Duration::from_secs(3_600)).await;
                 }
                 Ok(EngineOutput::from_text(self.canned_response(marker)))
             })
@@ -1024,6 +1207,116 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, SearchEvent::WebHits { .. }))
         );
+    }
+
+    fn exhaustive_request() -> SearchRequest {
+        SearchRequest {
+            mode: Mode::Exhaustive,
+            ..request()
+        }
+    }
+
+    fn sub_query_starts(events: &[SearchEvent]) -> Vec<usize> {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                SearchEvent::SubQueryStarted { idx } => Some(*idx),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn gaps_in(events: &[SearchEvent]) -> Option<&[SubQuery]> {
+        events.iter().find_map(|event| match event {
+            SearchEvent::ReflectionGaps { gaps } => Some(gaps.as_slice()),
+            _ => None,
+        })
+    }
+
+    #[tokio::test]
+    async fn exhaustive_mode_searches_the_gaps_the_critic_finds_and_synthesizes_again() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let events = drain_with(
+            engine.clone(),
+            Arc::new(NoopWebFetcher),
+            exhaustive_request(),
+        )
+        .await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::ReflectionStarted))
+        );
+        let gaps = gaps_in(&events).expect("the critic reported gaps");
+        assert_eq!(gaps.len(), 1);
+        assert_eq!(gaps[0].query, "missing numbers");
+        assert_eq!(sub_query_starts(&events), vec![0, 1, 2, 3]);
+        assert_eq!(engine.prompts_with(SYNTHESIS_MARKER).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_second_synthesis_reads_the_gap_findings_too() {
+        let engine = Arc::new(FakeEngine::reliable());
+        drain_with(
+            engine.clone(),
+            Arc::new(NoopWebFetcher),
+            exhaustive_request(),
+        )
+        .await;
+        let synthesis = engine.prompts_with(SYNTHESIS_MARKER);
+        let reflection = engine.prompts_with(REFLECTION_MARKER);
+        assert_eq!(reflection.len(), 1);
+        assert!(reflection[0].contains("- [en] topic overview"));
+        assert!(reflection[0].contains("Compiled"));
+        assert!(!synthesis[0].contains("missing numbers"));
+        assert!(synthesis[1].contains("missing numbers"));
+    }
+
+    #[tokio::test]
+    async fn other_modes_never_pay_for_a_reflection_round() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let events = drain_with(engine.clone(), Arc::new(NoopWebFetcher), request()).await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::ReflectionStarted))
+        );
+        assert!(engine.prompts_with(REFLECTION_MARKER).is_empty());
+        assert_eq!(engine.prompts_with(SYNTHESIS_MARKER).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_critic_that_finds_nothing_ships_the_draft_unchanged() {
+        let engine = Arc::new(FakeEngine::finding_no_gaps());
+        let events = drain_with(
+            engine.clone(),
+            Arc::new(NoopWebFetcher),
+            exhaustive_request(),
+        )
+        .await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert_eq!(gaps_in(&events).expect("an empty report").len(), 0);
+        assert_eq!(sub_query_starts(&events), vec![0, 1, 2]);
+        assert_eq!(engine.prompts_with(SYNTHESIS_MARKER).len(), 1);
+        assert_eq!(answer_in(&events).title, "Compiled");
+    }
+
+    #[tokio::test]
+    async fn a_failing_critic_ships_the_draft_instead_of_the_search() {
+        let engine = Arc::new(FakeEngine::failing_on(&[REFLECTION_MARKER]));
+        let events = drain_with(engine, Arc::new(NoopWebFetcher), exhaustive_request()).await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert_eq!(answer_in(&events).title, "Compiled");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reflection_round_that_blows_its_budget_still_ships_the_draft() {
+        let engine = Arc::new(FakeEngine::stalling_on(&[REFLECTION_MARKER]));
+        let events = drain_with(engine, Arc::new(NoopWebFetcher), exhaustive_request()).await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert_eq!(answer_in(&events).title, "Compiled");
     }
 
     #[test]

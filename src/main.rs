@@ -25,7 +25,7 @@ struct Cli {
 
     #[arg(
         long,
-        help = "Search mode: general, scientific, news, code, forums, or deep"
+        help = "Search mode: general, scientific, news, code, forums, deep, or exhaustive"
     )]
     mode: Option<Mode>,
 
@@ -251,6 +251,13 @@ fn report_progress(event: &SearchEvent) {
             eprintln!("muaddib: sub-query {} {outcome}", idx + 1);
         }
         SearchEvent::SynthesisStarted => eprintln!("muaddib: synthesizing answer..."),
+        SearchEvent::ReflectionStarted => eprintln!("muaddib: reviewing the draft..."),
+        SearchEvent::ReflectionGaps { gaps } => {
+            eprintln!("muaddib: {} gaps found", gaps.len());
+            for gap in gaps {
+                eprintln!("  [{}] {}", gap.lang, gap.query);
+            }
+        }
         SearchEvent::LinkChecked { source_id, status } => {
             eprintln!("muaddib: link [{source_id}] {}", link_status_label(*status));
         }

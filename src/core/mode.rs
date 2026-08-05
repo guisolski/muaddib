@@ -11,7 +11,10 @@ pub enum Mode {
     Code,
     Forums,
     Deep,
+    Exhaustive,
 }
+
+pub const MAX_REFLECT_ROUNDS: u8 = 1;
 
 #[derive(Debug)]
 pub struct ModeSpec {
@@ -23,6 +26,7 @@ pub struct ModeSpec {
     pub facets: &'static [&'static str],
     pub site_hints: &'static [&'static str],
     pub source_notes: bool,
+    pub reflect_rounds: u8,
 }
 
 pub const MODES: &[ModeSpec] = &[
@@ -43,6 +47,7 @@ pub const MODES: &[ModeSpec] = &[
         ],
         site_hints: &[],
         source_notes: false,
+        reflect_rounds: 0,
     },
     ModeSpec {
         mode: Mode::Scientific,
@@ -61,6 +66,7 @@ pub const MODES: &[ModeSpec] = &[
         ],
         site_hints: &[],
         source_notes: false,
+        reflect_rounds: 0,
     },
     ModeSpec {
         mode: Mode::News,
@@ -79,6 +85,7 @@ pub const MODES: &[ModeSpec] = &[
         ],
         site_hints: &[],
         source_notes: false,
+        reflect_rounds: 0,
     },
     ModeSpec {
         mode: Mode::Code,
@@ -97,6 +104,7 @@ pub const MODES: &[ModeSpec] = &[
         ],
         site_hints: &["site:stackoverflow.com", "site:github.com", "site:docs.rs"],
         source_notes: false,
+        reflect_rounds: 0,
     },
     ModeSpec {
         mode: Mode::Forums,
@@ -119,6 +127,7 @@ pub const MODES: &[ModeSpec] = &[
             "site:lobste.rs",
         ],
         source_notes: false,
+        reflect_rounds: 0,
     },
     ModeSpec {
         mode: Mode::Deep,
@@ -137,6 +146,26 @@ pub const MODES: &[ModeSpec] = &[
         ],
         site_hints: &[],
         source_notes: true,
+        reflect_rounds: 0,
+    },
+    ModeSpec {
+        mode: Mode::Exhaustive,
+        label: "Exhaustive",
+        breadth: 6,
+        cross_language: true,
+        instructions: "Leave nothing unexamined. Prefer primary sources over summaries, quantify every claim the evidence allows, and actively hunt for material that contradicts the emerging picture.",
+        facets: &[
+            "primary sources and raw data",
+            "quantitative evidence",
+            "contradicting evidence",
+            "methodology and limitations",
+            "edge cases and exceptions",
+            "regional and sector differences",
+            "unresolved questions",
+        ],
+        site_hints: &[],
+        source_notes: true,
+        reflect_rounds: 1,
     },
 ];
 
@@ -217,6 +246,24 @@ mod tests {
     }
 
     #[test]
+    fn modes_table_keeps_reflection_within_the_budget_cap() {
+        for spec in MODES {
+            assert!(spec.reflect_rounds <= MAX_REFLECT_ROUNDS, "{}", spec.label);
+        }
+    }
+
+    #[test]
+    fn reflecting_modes_also_ask_the_model_for_source_notes() {
+        for spec in MODES {
+            assert!(
+                spec.reflect_rounds == 0 || spec.source_notes,
+                "{}",
+                spec.label
+            );
+        }
+    }
+
+    #[test]
     fn every_mode_resolves_its_own_spec() {
         for mode in Mode::all() {
             assert_eq!(mode.spec().mode, mode);
@@ -250,6 +297,11 @@ mod tests {
                 name: "mixed case",
                 input: "dEEp",
                 want: Ok(Mode::Deep),
+            },
+            Case {
+                name: "exhaustive",
+                input: "exhaustive",
+                want: Ok(Mode::Exhaustive),
             },
             Case {
                 name: "unknown",
@@ -289,6 +341,11 @@ mod tests {
                 name: "deep",
                 mode: Mode::Deep,
                 want: "\"deep\"",
+            },
+            Case {
+                name: "exhaustive",
+                mode: Mode::Exhaustive,
+                want: "\"exhaustive\"",
             },
         ];
         for case in cases {

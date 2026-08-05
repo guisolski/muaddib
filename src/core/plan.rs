@@ -107,7 +107,7 @@ fn parse_subqueries(expansion: &Value, default_lang: &str) -> Vec<SubQuery> {
         .unwrap_or_default()
 }
 
-fn parse_subquery(item: &Value, default_lang: &str) -> Option<SubQuery> {
+pub(crate) fn parse_subquery(item: &Value, default_lang: &str) -> Option<SubQuery> {
     let query = non_empty_str(item.get("query")?)?;
     let lang = item
         .get("lang")

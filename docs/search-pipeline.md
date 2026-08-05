@@ -1,8 +1,8 @@
 # Search pipeline
 
-`pipeline/search.rs` orchestrates eight stages. All planning, merging, and
-citation logic is pure (`src/core/`); the pipeline only sequences engine calls
-and emits events.
+`pipeline/search.rs` orchestrates eight stages, plus a ninth that only
+`Exhaustive` mode pays for. All planning, merging, and citation logic is pure
+(`src/core/`); the pipeline only sequences engine calls and emits events.
 
 `request.fast` selects a second, much shorter path — see
 [Fast mode](#fast-mode-one-call) below.
@@ -36,7 +36,7 @@ breadth. **Any failure degrades, never aborts**: a per-mode fallback facet table
 (`fallback_expansion`) produces a deterministic plan offline.
 
 Breadth comes from the mode (`General` 3, `Scientific` 4, `News` 3, `Code` 3,
-`Forums` 3, `Deep` 6)
+`Forums` 3, `Deep` 6, `Exhaustive` 6)
 unless `expansion_breadth` overrides it (1–8). A `"simple"` complexity rating —
 the model judging that one direct search fully answers the query — narrows the
 plan to a single sub-query, so synthesis gets a small findings payload. An
@@ -80,7 +80,7 @@ never break.
 ### 3. Page-content grounding
 
 With the current mode listed in `[websearch] ground_modes` (default:
-`scientific` and `deep`), the top `ground_top_n` reranked hits of each
+`scientific`, `deep`, and `exhaustive`), the top `ground_top_n` reranked hits of each
 sub-query have their pages fetched (`pipeline/pages.rs`) — GET with a 4s
 per-request timeout, `text/html`/`application/xhtml` only, 2 MiB cap, 4
 concurrent fetches, all under a 10s stage deadline that keeps whatever
@@ -154,6 +154,40 @@ A `conflict` block is available to synthesis but restricted by prompt to finding
 genuinely disagree, with at least two positions each carrying their own `source_ids`.
 It is absent from `FAST_ANSWER_SCHEMA` — one engine call has nothing to cross-check
 against, so fast mode has no business adjudicating a conflict.
+
+### 6.5 Reflect (Exhaustive only)
+
+`ModeSpec.reflect_rounds` is 0 for every mode but `Exhaustive`, where it is 1.
+When it is non-zero the answer produced by stage 6 is a **draft**, and one critic
+call reads it back.
+
+The critic receives the draft rendered through `core/export.rs::to_markdown` —
+the same Markdown a user gets from `e` — plus the list of sub-queries already
+searched, and returns coverage gaps in the sub-query shape the planner already
+validates:
+
+```json
+{"gaps": [{"query": "...", "lang": "BCP-47", "rationale": "..."}]}
+```
+
+`core/reflect.rs::gaps_from_reflection` (pure) validates each row, drops any gap
+that repeats a sub-query already searched (case- and whitespace-insensitive), and
+caps the list at `MAX_REFLECTION_GAPS` (3). An empty list is the expected answer
+and the prompt says so: the critic is told not to invent a gap to look thorough.
+
+Surviving gaps go back through the **existing** stages 2–5 — web-search
+grounding, page grounding, fan-out, merge — and stage 6 runs again over the
+combined findings. No new orchestration exists: `gather_stage` is the same
+function the first round calls, with a sub-query index `offset` so the second
+round's `SubQueryStarted` events append to the progress list instead of
+overwriting it.
+
+**The draft always survives.** The whole round runs under one
+`reflection_timeout` budget (a critique + a fan-out + a scaled re-synthesis, so
+~18 min at the default 180s base with breadth 6). If the budget expires, the
+critic call fails, the gap searches all fail, or the second synthesis fails, the
+draft ships unchanged — the same "degrades, never aborts" rule as every other
+stage. A reflection round can only add findings, never subtract them.
 
 ### 7. Validate links
 

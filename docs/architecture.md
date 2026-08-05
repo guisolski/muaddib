@@ -28,6 +28,7 @@ flowchart TB
         ANSWER[core/answer — answer schema]
         EXPORT[core/export — markdown, OSC 52]
         CRED[core/credibility — source classes]
+        REFLECT[core/reflect — coverage gaps]
         CIT[core/citations — merge and renumber]
         WEBT[core/websearch — WEB_ENGINES table and parsers]
         RANK[core/rank — BM25 hit reranking]
@@ -70,7 +71,7 @@ logic needs to be touched:
 
 | Table | Location | Drives |
 |---|---|---|
-| `MODES` | `core/mode.rs` | search modes, breadth, prompt instructions |
+| `MODES` | `core/mode.rs` | search modes, breadth, prompt instructions, reflection rounds |
 | `ENGINES` | `engines/mod.rs` | engine binaries, argv, parse strategy |
 | `WEB_ENGINES` | `core/websearch.rs` | web/academic search engines, request shape, hit parsers |
 | `CONTENT_SELECTORS` / `NOISE_TAGS` | `core/readability.rs` | page-content extraction roots and excluded subtrees |
@@ -108,6 +109,13 @@ sequenceDiagram
     P->>E: synthesis prompt + answer JSON schema
     E-->>P: answer JSON
     P->>P: renumber + eject hallucinated URLs (pure)
+    opt Exhaustive mode only
+        P-->>T: ReflectionStarted
+        P->>E: reflection prompt + draft answer
+        E-->>P: coverage gaps JSON
+        P-->>T: ReflectionGaps
+        P->>E: extra sub-searches + re-synthesis
+    end
     P-->>T: AnswerReady
     P-->>T: LinkChecked (per source, parallel HEAD)
     P-->>T: Completed
@@ -127,7 +135,7 @@ src/
 ├── config_store.rs   config file resolution and persistence (MUADDIB_CONFIG, XDG)
 ├── history_store.rs  search history file: append, load, clear (MUADDIB_HISTORY, XDG state)
 ├── tree_store.rs     research session files: save, load (MUADDIB_SESSIONS, XDG state)
-├── core/             pure: mode, plan, prompts, extract, answer, citations, config, history, websearch, rank, readability, tree, context
+├── core/             pure: mode, plan, prompts, extract, answer, citations, config, history, websearch, rank, readability, tree, context, reflect
 ├── engines/          EngineSpec table, Engine trait, CliEngine, output parsing
 ├── pipeline/         SearchEvent protocol, stage orchestration, web-search grounding, page fetching, link validation
 └── tui/              App state, reducer, keymap, theme, views, widgets

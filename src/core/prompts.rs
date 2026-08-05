@@ -10,6 +10,41 @@ pub const EXPANSION_MARKER: &str = "MUADDIB:EXPAND";
 pub const SUB_SEARCH_MARKER: &str = "MUADDIB:SUBSEARCH";
 pub const SYNTHESIS_MARKER: &str = "MUADDIB:SYNTH";
 pub const FAST_MARKER: &str = "MUADDIB:FAST";
+pub const REFLECTION_MARKER: &str = "MUADDIB:REFLECT";
+
+pub fn reflection_prompt(plan: &SearchPlan, draft: &str, max_gaps: usize) -> String {
+    format!(
+        "[task {REFLECTION_MARKER}] You are the critic of a meta-search engine. A draft answer \
+         has just been compiled and you decide whether it is good enough to ship.\n\
+         Original query: {original}\n\
+         Search mode: {label}. {instructions}\n\
+         Sub-queries already searched, so do not repeat them:\n{searched}\n\
+         Draft answer, as Markdown:\n{draft}\n\
+         Name only the gaps that another web search could actually close: a claim with no \
+         source behind it, a facet of the original query the draft never touches, a number or \
+         date the draft leaves vague, or a position the draft asserts without looking for the \
+         opposing evidence.\n\
+         Rules:\n\
+         - Return at most {max_gaps} gaps, ordered by how much they weaken the answer.\n\
+         - Each gap must be a concrete, searchable query, not an instruction to the writer.\n\
+         - Never repeat a sub-query already listed above, in any wording.\n\
+         - Return an empty list when the draft is well supported. An empty list is the right \
+         answer more often than not; do not invent a gap to look thorough.\n\
+         Reply with ONLY this JSON, no prose:\n\
+         {{\"gaps\":[{{\"query\":\"...\",\"lang\":\"BCP-47 tag\",\"rationale\":\"...\"}}]}}",
+        original = plan.original,
+        label = plan.mode.spec().label,
+        instructions = plan.mode.spec().instructions,
+        searched = searched_lines(&plan.sub_queries),
+    )
+}
+
+fn searched_lines(sub_queries: &[SubQuery]) -> String {
+    sub_queries
+        .iter()
+        .map(|sub| format!("- [{}] {}\n", sub.lang, sub.query))
+        .collect()
+}
 
 pub fn fast_prompt(
     query: &str,
@@ -263,10 +298,48 @@ mod tests {
                 prompt: fast_prompt("q", mode, "en", false, &ResearchContext::default()),
                 marker: FAST_MARKER,
             },
+            Case {
+                name: "reflection",
+                prompt: reflection_prompt(&sample_plan(), "# Draft", 3),
+                marker: REFLECTION_MARKER,
+            },
         ];
         for case in cases {
             assert!(case.prompt.contains(case.marker), "{}", case.name);
         }
+    }
+
+    #[test]
+    fn reflection_prompt_lists_what_was_searched_and_bans_repeats() {
+        let plan = SearchPlan {
+            sub_queries: vec![
+                SubQuery {
+                    query: "solar capacity brazil".to_string(),
+                    lang: "en".to_string(),
+                    rationale: String::new(),
+                },
+                SubQuery {
+                    query: "capacidade solar instalada".to_string(),
+                    lang: "pt-BR".to_string(),
+                    rationale: String::new(),
+                },
+            ],
+            ..sample_plan()
+        };
+        let prompt = reflection_prompt(&plan, "# Draft\n\nA claim.", 3);
+        assert!(prompt.contains("- [en] solar capacity brazil"));
+        assert!(prompt.contains("- [pt-BR] capacidade solar instalada"));
+        assert!(prompt.contains("Never repeat a sub-query already listed above"));
+        assert!(prompt.contains("at most 3 gaps"));
+        assert!(prompt.contains("A claim."));
+    }
+
+    #[test]
+    fn reflection_prompt_makes_an_empty_answer_the_easy_one() {
+        let prompt = reflection_prompt(&sample_plan(), "# Draft", 3);
+        assert!(prompt.contains("Return an empty list when the draft is well supported"));
+        assert!(prompt.contains("do not invent a gap to look thorough"));
+        assert!(prompt.contains("\"gaps\""));
     }
 
     #[test]

@@ -44,6 +44,13 @@ fn fast_request() -> SearchRequest {
     }
 }
 
+fn exhaustive_request() -> SearchRequest {
+    SearchRequest {
+        mode: Mode::Exhaustive,
+        ..request()
+    }
+}
+
 async fn collect_events(script: &str) -> Vec<SearchEvent> {
     drain(script, request()).await
 }
@@ -136,6 +143,37 @@ async fn subprocess_pipeline_ejects_sources_absent_from_findings() {
         })
         .count();
     assert_eq!(cited_paragraphs, 2);
+}
+
+#[tokio::test]
+async fn exhaustive_mode_reflects_over_subprocess_calls() {
+    let events = drain("fake-engine.sh", exhaustive_request()).await;
+    assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, SearchEvent::ReflectionStarted))
+    );
+    let gaps = events
+        .iter()
+        .find_map(|event| match event {
+            SearchEvent::ReflectionGaps { gaps } => Some(gaps),
+            _ => None,
+        })
+        .expect("the critic reported gaps");
+    assert_eq!(gaps.len(), 1);
+    assert_eq!(
+        gaps[0].query,
+        "rust async runtime scheduler latency measurements"
+    );
+    let started: Vec<usize> = events
+        .iter()
+        .filter_map(|event| match event {
+            SearchEvent::SubQueryStarted { idx } => Some(*idx),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, vec![0, 1, 2, 3, 4]);
 }
 
 #[tokio::test]

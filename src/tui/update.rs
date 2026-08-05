@@ -1251,7 +1251,7 @@ mod tests {
             &mut app,
             AppEvent::Key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT)),
         );
-        assert_eq!(app.current_mode(), Mode::Deep);
+        assert_eq!(app.current_mode(), Mode::Exhaustive);
     }
 
     #[test]

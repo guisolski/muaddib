@@ -54,7 +54,11 @@ impl Default for WebSearchConfig {
             engines: Vec::new(),
             searxng_url: String::new(),
             mailto: String::new(),
-            ground_modes: vec!["scientific".to_string(), "deep".to_string()],
+            ground_modes: vec![
+                "scientific".to_string(),
+                "deep".to_string(),
+                "exhaustive".to_string(),
+            ],
             ground_top_n: 3,
             ground_page_chars: 4_000,
         }
@@ -389,9 +393,9 @@ mod tests {
         }
         let cases = [
             Case {
-                name: "absent keys use scientific and deep defaults",
+                name: "absent keys ground the three deepest modes",
                 input: "",
-                want_modes: vec!["scientific", "deep"],
+                want_modes: vec!["scientific", "deep", "exhaustive"],
                 want_top_n: 3,
                 want_chars: 4_000,
             },
@@ -405,21 +409,21 @@ mod tests {
             Case {
                 name: "top n too high is clamped down",
                 input: "[websearch]\nground_top_n = 99",
-                want_modes: vec!["scientific", "deep"],
+                want_modes: vec!["scientific", "deep", "exhaustive"],
                 want_top_n: MAX_GROUND_PAGES,
                 want_chars: 4_000,
             },
             Case {
                 name: "top n zero is clamped up",
                 input: "[websearch]\nground_top_n = 0",
-                want_modes: vec!["scientific", "deep"],
+                want_modes: vec!["scientific", "deep", "exhaustive"],
                 want_top_n: MIN_GROUND_PAGES,
                 want_chars: 4_000,
             },
             Case {
                 name: "page chars are clamped to bounds",
                 input: "[websearch]\nground_page_chars = 1",
-                want_modes: vec!["scientific", "deep"],
+                want_modes: vec!["scientific", "deep", "exhaustive"],
                 want_top_n: 3,
                 want_chars: MIN_GROUND_PAGE_CHARS,
             },

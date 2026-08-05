@@ -12,7 +12,7 @@ pub mod websearch;
 use crate::core::answer::Answer;
 pub use crate::core::citations::LinkStatus;
 use crate::core::cost::EngineUsage;
-use crate::core::plan::SearchPlan;
+use crate::core::plan::{SearchPlan, SubQuery};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SearchEvent {
@@ -23,6 +23,8 @@ pub enum SearchEvent {
     SubQueryFinished { idx: usize, ok: bool },
     CallCosted { usage: EngineUsage },
     SynthesisStarted,
+    ReflectionStarted,
+    ReflectionGaps { gaps: Vec<SubQuery> },
     AnswerReady(Box<Answer>),
     LinkChecked { source_id: u32, status: LinkStatus },
     ImageFetched { url: String, bytes: Option<Vec<u8>> },

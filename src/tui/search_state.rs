@@ -43,6 +43,8 @@ pub struct SearchState {
     pub pages_fetched: usize,
     pub progress: Vec<SubQueryState>,
     pub synthesizing: bool,
+    pub reflecting: bool,
+    pub gaps: Option<usize>,
     pub started_at: Option<Instant>,
     pub handle: Option<SearchHandle>,
     pub answer: Option<Answer>,
@@ -62,6 +64,8 @@ impl SearchState {
         self.pages_fetched = 0;
         self.progress.clear();
         self.synthesizing = false;
+        self.reflecting = false;
+        self.gaps = None;
         self.answer = None;
         self.links.clear();
         self.images.clear();
@@ -75,6 +79,7 @@ impl SearchState {
     pub fn end(&mut self) {
         self.handle = None;
         self.synthesizing = false;
+        self.reflecting = false;
     }
 
     pub fn events_mut(&mut self) -> Option<&mut Receiver<SearchEvent>> {
@@ -102,8 +107,8 @@ impl SearchState {
                 SearchOutcome::None
             }
             SearchEvent::WebHits { count, urls } => {
-                self.web_hits = Some(count);
-                self.web_urls = urls;
+                self.web_hits = Some(self.web_hits.unwrap_or(0) + count);
+                self.web_urls.extend(urls);
                 SearchOutcome::None
             }
             SearchEvent::PageFetched { ok, .. } => {
@@ -131,11 +136,27 @@ impl SearchState {
             }
             SearchEvent::SynthesisStarted => {
                 self.synthesizing = true;
+                self.reflecting = false;
+                SearchOutcome::None
+            }
+            SearchEvent::ReflectionStarted => {
+                self.synthesizing = false;
+                self.reflecting = true;
+                SearchOutcome::None
+            }
+            SearchEvent::ReflectionGaps { gaps } => {
+                self.gaps = Some(gaps.len());
+                self.progress
+                    .extend(std::iter::repeat_n(SubQueryState::Pending, gaps.len()));
+                if let Some(plan) = self.plan.as_mut() {
+                    plan.sub_queries.extend(gaps);
+                }
                 SearchOutcome::None
             }
             SearchEvent::AnswerReady(answer) => {
                 self.answer = Some(*answer);
                 self.synthesizing = false;
+                self.reflecting = false;
                 self.reveal_started = Some(tick);
                 SearchOutcome::AnswerReady
             }
@@ -151,10 +172,12 @@ impl SearchState {
             }
             SearchEvent::Completed => {
                 self.synthesizing = false;
+                self.reflecting = false;
                 SearchOutcome::Completed
             }
             SearchEvent::Failed(message) => {
                 self.synthesizing = false;
+                self.reflecting = false;
                 self.failed_at = Some(tick);
                 SearchOutcome::Failed(message)
             }
@@ -287,6 +310,85 @@ mod tests {
         state.begin(Instant::now());
         assert_eq!(state.web_hits, None);
         assert!(state.web_urls.is_empty());
+    }
+
+    #[test]
+    fn a_second_round_of_web_hits_adds_to_the_first() {
+        let mut state = SearchState::default();
+        for count in [7, 2] {
+            state.apply_event(
+                SearchEvent::WebHits {
+                    count,
+                    urls: vec![format!("https://{count}.example")],
+                },
+                0,
+            );
+        }
+        assert_eq!(state.web_hits, Some(9));
+        assert_eq!(
+            state.web_urls,
+            vec!["https://7.example", "https://2.example"]
+        );
+    }
+
+    #[test]
+    fn reflection_gaps_extend_the_plan_the_screen_is_showing() {
+        let mut state = SearchState::default();
+        state.apply_event(SearchEvent::PlanReady(two_sub_query_plan()), 0);
+        state.apply_event(SearchEvent::SubQueryFinished { idx: 0, ok: true }, 0);
+        let outcome = state.apply_event(SearchEvent::ReflectionStarted, 0);
+        assert_eq!(outcome, SearchOutcome::None);
+        assert!(state.reflecting);
+        state.apply_event(
+            SearchEvent::ReflectionGaps {
+                gaps: vec![SubQuery {
+                    query: "the missing number".to_string(),
+                    ..SubQuery::default()
+                }],
+            },
+            0,
+        );
+        assert_eq!(state.gaps, Some(1));
+        assert_eq!(state.plan.as_ref().unwrap().sub_queries.len(), 3);
+        assert_eq!(
+            state.plan.as_ref().unwrap().sub_queries[2].query,
+            "the missing number"
+        );
+        assert_eq!(state.sub_query_state(0), SubQueryState::Done);
+        assert_eq!(state.sub_query_state(2), SubQueryState::Pending);
+    }
+
+    #[test]
+    fn the_reflecting_flag_clears_on_every_way_a_search_can_move_on() {
+        struct Case {
+            name: &'static str,
+            event: SearchEvent,
+        }
+        let cases = [
+            Case {
+                name: "the second synthesis takes over",
+                event: SearchEvent::SynthesisStarted,
+            },
+            Case {
+                name: "the answer arrives",
+                event: SearchEvent::AnswerReady(Box::default()),
+            },
+            Case {
+                name: "the search completes",
+                event: SearchEvent::Completed,
+            },
+            Case {
+                name: "the search fails",
+                event: SearchEvent::Failed("boom".to_string()),
+            },
+        ];
+        for case in cases {
+            let mut state = SearchState::default();
+            state.apply_event(SearchEvent::ReflectionStarted, 0);
+            assert!(state.reflecting, "{}", case.name);
+            state.apply_event(case.event, 0);
+            assert!(!state.reflecting, "{}", case.name);
+        }
     }
 
     #[test]

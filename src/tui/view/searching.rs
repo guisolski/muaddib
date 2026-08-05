@@ -1,6 +1,6 @@
 use crate::pipeline::search::FAST_TARGET_SECS;
 use crate::tui::app::App;
-use crate::tui::search_state::SubQueryState;
+use crate::tui::search_state::{SearchState, SubQueryState};
 use crate::tui::theme;
 use crate::tui::widgets::{mascot, spinner};
 use ratatui::Frame;
@@ -54,16 +54,37 @@ fn panel_lines(app: &App, include_mascot: bool, width: usize) -> Vec<Line<'stati
             theme::dim(),
         ));
     }
-    if app.search.synthesizing {
-        lines.push(Line::default());
-        lines.push(Line::from(vec![
-            Span::styled(spinner::frame(app.tick).to_string(), theme::citation()),
-            Span::styled(" synthesizing answer…", theme::citation()),
-        ]));
-    }
+    lines.extend(stage_lines(app));
     lines.push(Line::default());
     lines.push(Line::styled("Esc cancel", theme::dim()));
     lines
+}
+
+fn stage_lines(app: &App) -> Vec<Line<'static>> {
+    let Some(label) = stage_label(&app.search) else {
+        return Vec::new();
+    };
+    vec![
+        Line::default(),
+        Line::from(vec![
+            Span::styled(spinner::frame(app.tick).to_string(), theme::citation()),
+            Span::styled(label, theme::citation()),
+        ]),
+    ]
+}
+
+fn stage_label(search: &SearchState) -> Option<String> {
+    if search.reflecting {
+        return Some(match search.gaps {
+            None => " reviewing the draft…".to_string(),
+            Some(0) => " reviewing the draft… no gaps found".to_string(),
+            Some(1) => " reviewing the draft… 1 gap found".to_string(),
+            Some(count) => format!(" reviewing the draft… {count} gaps found"),
+        });
+    }
+    search
+        .synthesizing
+        .then(|| " synthesizing answer…".to_string())
 }
 
 fn query_text(app: &App) -> String {
@@ -111,5 +132,86 @@ fn state_glyph(state: SubQueryState, tick: u64) -> Span<'static> {
         SubQueryState::Running => Span::styled(spinner::frame(tick).to_string(), theme::citation()),
         SubQueryState::Done => Span::styled("✓", theme::ok()),
         SubQueryState::Failed => Span::styled("✗", theme::err()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_stage_line_names_whichever_stage_is_running() {
+        struct Case {
+            name: &'static str,
+            search: SearchState,
+            want: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                name: "fanning out shows no stage line at all",
+                search: SearchState::default(),
+                want: None,
+            },
+            Case {
+                name: "synthesis names itself",
+                search: SearchState {
+                    synthesizing: true,
+                    ..SearchState::default()
+                },
+                want: Some(" synthesizing answer…"),
+            },
+            Case {
+                name: "the critic is running but has not reported yet",
+                search: SearchState {
+                    reflecting: true,
+                    ..SearchState::default()
+                },
+                want: Some(" reviewing the draft…"),
+            },
+            Case {
+                name: "a clean review says so instead of showing a zero",
+                search: SearchState {
+                    reflecting: true,
+                    gaps: Some(0),
+                    ..SearchState::default()
+                },
+                want: Some(" reviewing the draft… no gaps found"),
+            },
+            Case {
+                name: "one gap stays singular",
+                search: SearchState {
+                    reflecting: true,
+                    gaps: Some(1),
+                    ..SearchState::default()
+                },
+                want: Some(" reviewing the draft… 1 gap found"),
+            },
+            Case {
+                name: "several gaps are counted",
+                search: SearchState {
+                    reflecting: true,
+                    gaps: Some(3),
+                    ..SearchState::default()
+                },
+                want: Some(" reviewing the draft… 3 gaps found"),
+            },
+            Case {
+                name: "reflection wins while both flags linger",
+                search: SearchState {
+                    reflecting: true,
+                    synthesizing: true,
+                    ..SearchState::default()
+                },
+                want: Some(" reviewing the draft…"),
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                stage_label(&case.search).as_deref(),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
     }
 }

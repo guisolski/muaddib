@@ -76,7 +76,7 @@ engines = []                # empty = mode defaults; else an allowlist of engine
 searxng_url = ""            # base URL of your own SearXNG instance; empty = off
                             # when set, searxng leads the mode's default engine list
 mailto = ""                 # optional email for the OpenAlex/Crossref polite pools
-ground_modes = ["scientific", "deep"]
+ground_modes = ["scientific", "deep", "exhaustive"]
                             # modes whose top hits get their page content fetched
                             # and fed to the sub-searches; empty = off everywhere
 ground_top_n = 3            # pages fetched per sub-query, clamped to 1..=5
@@ -120,7 +120,7 @@ CLI flags > config file > defaults:
 | answer language | `--lang` | `language` | `pt-BR` |
 | engine | `--engine` | `engine` | `claude` |
 | model | `--model` | `[engines.<name>] model` | engine default |
-| search mode | `--mode` | — | `general` (`scientific`, `news`, `code`, `forums`, `deep`) |
+| search mode | `--mode` | — | `general` (`scientific`, `news`, `code`, `forums`, `deep`, `exhaustive`) |
 | fast mode | `--fast` | — | off (`Ctrl+F` toggles it in the TUI) |
 | web search | `--no-websearch` (disables) | `[websearch] enabled` | on |
 

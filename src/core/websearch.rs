@@ -232,6 +232,14 @@ const MODE_WEB_ENGINES: &[(Mode, &[WebEngineId])] = &[
             WebEngineId::Mojeek,
         ],
     ),
+    (
+        Mode::Exhaustive,
+        &[
+            WebEngineId::DuckDuckGoHtml,
+            WebEngineId::Bing,
+            WebEngineId::Mojeek,
+        ],
+    ),
 ];
 
 pub fn web_query(sub_query: &str, mode: Mode) -> String {

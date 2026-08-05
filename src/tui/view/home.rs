@@ -142,6 +142,10 @@ const MODES_LAYOUTS: &[ModesLayout] = &[
         separator: "·",
         label_chars: Some(4),
     },
+    ModesLayout {
+        separator: "·",
+        label_chars: Some(3),
+    },
 ];
 
 fn abbreviate(label: &str, layout: &ModesLayout) -> String {
@@ -238,49 +242,50 @@ mod tests {
             name: &'static str,
             width: u16,
             want_separator: &'static str,
-            want_abbreviated: bool,
+            want_label_chars: Option<usize>,
         }
         let cases = [
             Case {
                 name: "roomy terminal keeps spaced separators",
                 width: 100,
                 want_separator: " · ",
-                want_abbreviated: false,
+                want_label_chars: None,
             },
             Case {
                 name: "medium terminal drops the padding first",
-                width: 45,
+                width: 55,
                 want_separator: "·",
-                want_abbreviated: false,
+                want_label_chars: None,
             },
             Case {
                 name: "narrow terminal abbreviates the labels",
+                width: 40,
+                want_separator: "·",
+                want_label_chars: Some(4),
+            },
+            Case {
+                name: "narrower still shortens them again",
                 width: 30,
                 want_separator: "·",
-                want_abbreviated: true,
+                want_label_chars: Some(3),
             },
             Case {
                 name: "absurdly narrow still yields the tightest layout",
                 width: 1,
                 want_separator: "·",
-                want_abbreviated: true,
+                want_label_chars: Some(3),
             },
         ];
         for case in cases {
             let layout = modes_layout(case.width);
             assert_eq!(layout.separator, case.want_separator, "{}", case.name);
-            assert_eq!(
-                layout.label_chars.is_some(),
-                case.want_abbreviated,
-                "{}",
-                case.name
-            );
+            assert_eq!(layout.label_chars, case.want_label_chars, "{}", case.name);
         }
     }
 
     #[test]
     fn every_modes_layout_fits_the_width_it_claims() {
-        for width in [100_u16, 45, 30] {
+        for width in [100_u16, 63, 55, 40, 30] {
             let layout = modes_layout(width);
             assert!(layout_width(layout) <= usize::from(width), "width {width}");
         }
@@ -288,12 +293,13 @@ mod tests {
 
     #[test]
     fn abbreviated_labels_stay_unique() {
-        let layout = &MODES_LAYOUTS[MODES_LAYOUTS.len() - 1];
-        let labels: std::collections::BTreeSet<String> = MODES
-            .iter()
-            .map(|spec| abbreviate(spec.label, layout))
-            .collect();
-        assert_eq!(labels.len(), MODES.len());
+        for layout in MODES_LAYOUTS.iter().filter(|l| l.label_chars.is_some()) {
+            let labels: std::collections::BTreeSet<String> = MODES
+                .iter()
+                .map(|spec| abbreviate(spec.label, layout))
+                .collect();
+            assert_eq!(labels.len(), MODES.len(), "{:?}", layout.label_chars);
+        }
     }
 
     #[test]
