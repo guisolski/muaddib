@@ -126,8 +126,10 @@ budget by one unit per three sub-queries, capped at 3×. A `Deep` search (breadt
 therefore gets 360s where a `General` one gets 180s. The first evaluation run found
 this the hard way — `Deep` reliably timed out at a flat 180s while every narrower
 mode fit comfortably. Sub-searches keep the flat budget: each one is the same size
-regardless of how many there are (`core/answer.rs::ANSWER_SCHEMA` — via `--json-schema` on claude,
-inlined in the prompt otherwise) and the instruction to answer entirely in the
+regardless of how many there are.
+
+The schema (`core/answer.rs::ANSWER_SCHEMA`) travels via `--json-schema` on claude and
+inlined in the prompt otherwise, together with the instruction to answer entirely in the
 configured language, citing `source_ids` on every block, using **only** URLs
 present in the findings. The prompt favors compact visual blocks — short
 paragraphs, lists, tables, charts — and asks for a `diagram` block (`flow` for
@@ -143,6 +145,15 @@ values — the same anti-hallucination rule sources get. `renumber_sources` then
   (anti-hallucination gate),
 - drops dangling `source_ids` and deduplicates repeats,
 - renumbers sources 1..n in first-use order and prunes unused ones.
+
+`annotate_sources` then fills each surviving source's `class` and `published` from the
+grounding hits (ADR-0013). Those fields are deliberately absent from `ANSWER_SCHEMA`:
+muaddib computes credibility, the model never declares it.
+
+A `conflict` block is available to synthesis but restricted by prompt to findings that
+genuinely disagree, with at least two positions each carrying their own `source_ids`.
+It is absent from `FAST_ANSWER_SCHEMA` — one engine call has nothing to cross-check
+against, so fast mode has no business adjudicating a conflict.
 
 ### 7. Validate links
 

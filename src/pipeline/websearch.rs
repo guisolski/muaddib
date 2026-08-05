@@ -347,6 +347,7 @@ mod tests {
             url: url.to_string(),
             snippet: "snippet".to_string(),
             engine: "ddg",
+            ..Default::default()
         }
     }
 
@@ -431,6 +432,7 @@ mod tests {
                     url: "https://garden.example".to_string(),
                     snippet: "flowers and soil".to_string(),
                     engine: "ddg",
+                    ..Default::default()
                 }],
             ),
             (
@@ -440,6 +442,7 @@ mod tests {
                     url: "https://tokio.example".to_string(),
                     snippet: "tokio internals explained".to_string(),
                     engine: "bing",
+                    ..Default::default()
                 }],
             ),
         ]));

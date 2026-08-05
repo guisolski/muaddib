@@ -42,7 +42,7 @@ instinct) — the mouse kept the nose.
                 ╭──────────────────────────────────────╮
                 │ why is the sky blue?                 │
                 ╰──────────────────────────────────────╯
-                 General · Scientific · News · Deep
+         General · Scientific · News · Code · Forums · Deep
                              ⚡ fast
 
                         claude ● · default · pt-BR
@@ -104,6 +104,12 @@ instinct) — the mouse kept the nose.
   bar charts, and flow/timeline diagrams — all cited
 - Inline images from the searched pages, rendered in the terminal (kitty,
   iTerm2, sixel — unicode half-blocks everywhere else)
+- Trust signals on every source: a deterministic credibility class (peer-reviewed,
+  institutional, reference, press, community) from the domain and the engine that
+  found it, the publication year where an academic API supplies one, and a `!` on any
+  source that is the sole support for a claim
+- Contradiction blocks: when the findings genuinely disagree, the answer says so
+  instead of flattening it into confident prose
 - Live link validation (✓ / ✗ 404) directly in the sources list — and the status
   travels with the source, so exports, `--print` JSON, and reopened sessions keep it
 - Export the answer as Markdown: `y` copies it, `e` writes it to a file. Diagrams

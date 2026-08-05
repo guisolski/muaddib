@@ -22,6 +22,7 @@ pub struct ModeSpec {
     pub instructions: &'static str,
     pub facets: &'static [&'static str],
     pub site_hints: &'static [&'static str],
+    pub source_notes: bool,
 }
 
 pub const MODES: &[ModeSpec] = &[
@@ -41,6 +42,7 @@ pub const MODES: &[ModeSpec] = &[
             "frequently asked questions",
         ],
         site_hints: &[],
+        source_notes: false,
     },
     ModeSpec {
         mode: Mode::Scientific,
@@ -58,6 +60,7 @@ pub const MODES: &[ModeSpec] = &[
             "replication studies",
         ],
         site_hints: &[],
+        source_notes: false,
     },
     ModeSpec {
         mode: Mode::News,
@@ -75,6 +78,7 @@ pub const MODES: &[ModeSpec] = &[
             "economic impact",
         ],
         site_hints: &[],
+        source_notes: false,
     },
     ModeSpec {
         mode: Mode::Code,
@@ -92,6 +96,7 @@ pub const MODES: &[ModeSpec] = &[
             "real-world usage examples",
         ],
         site_hints: &["site:stackoverflow.com", "site:github.com", "site:docs.rs"],
+        source_notes: false,
     },
     ModeSpec {
         mode: Mode::Forums,
@@ -113,6 +118,7 @@ pub const MODES: &[ModeSpec] = &[
             "site:news.ycombinator.com",
             "site:lobste.rs",
         ],
+        source_notes: false,
     },
     ModeSpec {
         mode: Mode::Deep,
@@ -130,6 +136,7 @@ pub const MODES: &[ModeSpec] = &[
             "expert opinions",
         ],
         site_hints: &[],
+        source_notes: true,
     },
 ];
 

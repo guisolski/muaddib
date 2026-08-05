@@ -1,4 +1,6 @@
-use crate::core::answer::{Answer, Block, DiagramItem, DiagramType, ListItem, Source};
+use crate::core::answer::{
+    Answer, Block, ConflictPosition, DiagramItem, DiagramType, ListItem, Source,
+};
 use crate::core::citations::LinkStatus;
 use crate::core::mode::Mode;
 
@@ -107,6 +109,9 @@ fn block_markdown(block: &Block) -> String {
             source_ids,
             ..
         } => diagram_markdown(*diagram_type, title, items, source_ids),
+        Block::Conflict {
+            topic, positions, ..
+        } => conflict_markdown(topic, positions),
         Block::Image {
             url,
             caption,
@@ -115,6 +120,20 @@ fn block_markdown(block: &Block) -> String {
         } => format!("![{caption}]({url}){}\n\n", citation_marks(source_ids)),
         Block::Unknown => String::new(),
     }
+}
+
+fn conflict_markdown(topic: &str, positions: &[ConflictPosition]) -> String {
+    let rows: String = positions
+        .iter()
+        .map(|position| {
+            format!(
+                "> - {}{}\n",
+                position.claim,
+                citation_marks(&position.source_ids)
+            )
+        })
+        .collect();
+    format!("> [!WARNING]\n> **Sources disagree \u{2014} {topic}**\n>\n{rows}\n")
 }
 
 fn heading_line(level: u8, text: &str) -> String {
@@ -250,12 +269,14 @@ fn sources_markdown(sources: &[Source]) -> String {
         .iter()
         .map(|source| {
             format!(
-                "{}. {}[{}]({}){}\n",
+                "{}. {}{}[{}]({}){}{}\n",
                 source.id,
                 status_mark(source.status),
+                badge_mark(source),
                 escape_brackets(&source.title),
                 source.url,
-                lang_suffix(&source.lang)
+                lang_suffix(&source.lang),
+                note_suffix(&source.note)
             )
         })
         .collect();
@@ -267,6 +288,21 @@ fn status_mark(status: Option<LinkStatus>) -> String {
         Some(LinkStatus::Invalid(code)) => format!("~~{code}~~ "),
         Some(LinkStatus::Unreachable) => "~~unreachable~~ ".to_string(),
         Some(LinkStatus::Valid) | None => String::new(),
+    }
+}
+
+fn badge_mark(source: &Source) -> String {
+    match source.published {
+        Some(year) => format!("`{} {year}` ", source.class.label()),
+        None => format!("`{}` ", source.class.label()),
+    }
+}
+
+fn note_suffix(note: &str) -> String {
+    if note.is_empty() {
+        String::new()
+    } else {
+        format!(" \u{2014} {note}")
     }
 }
 
@@ -322,6 +358,7 @@ mod tests {
             url: format!("https://example.com/{id}"),
             lang: "en".to_string(),
             status,
+            ..Default::default()
         }
     }
 
@@ -465,6 +502,25 @@ mod tests {
                 want_contains: "![a chart](https://example.com/a.png)",
             },
             Case {
+                name: "conflict becomes a github warning callout",
+                block: Block::Conflict {
+                    topic: "projected 2027 capacity".to_string(),
+                    kind: crate::core::answer::ConflictKind::Direct,
+                    positions: vec![
+                        ConflictPosition {
+                            claim: "IEA reports 4.1 TW".to_string(),
+                            source_ids: vec![2],
+                        },
+                        ConflictPosition {
+                            claim: "IRENA reports 3.4 TW".to_string(),
+                            source_ids: vec![5],
+                        },
+                    ],
+                    emphasis: Emphasis::None,
+                },
+                want_contains: "> [!WARNING]\n> **Sources disagree \u{2014} projected 2027 capacity**\n>\n> - IEA reports 4.1 TW[2]\n> - IRENA reports 3.4 TW[5]",
+            },
+            Case {
                 name: "unknown blocks vanish",
                 block: Block::Unknown,
                 want_contains: "",
@@ -511,22 +567,22 @@ mod tests {
             Case {
                 name: "valid links render plainly",
                 status: Some(LinkStatus::Valid),
-                want: "1. [Source 1](https://example.com/1) (en)",
+                want: "1. `unclassified` [Source 1](https://example.com/1) (en)",
             },
             Case {
                 name: "unchecked links render plainly",
                 status: None,
-                want: "1. [Source 1](https://example.com/1) (en)",
+                want: "1. `unclassified` [Source 1](https://example.com/1) (en)",
             },
             Case {
                 name: "broken links are struck through with the code",
                 status: Some(LinkStatus::Invalid(404)),
-                want: "1. ~~404~~ [Source 1](https://example.com/1) (en)",
+                want: "1. ~~404~~ `unclassified` [Source 1](https://example.com/1) (en)",
             },
             Case {
                 name: "unreachable links say so",
                 status: Some(LinkStatus::Unreachable),
-                want: "1. ~~unreachable~~ [Source 1](https://example.com/1) (en)",
+                want: "1. ~~unreachable~~ `unclassified` [Source 1](https://example.com/1) (en)",
             },
         ];
         for case in cases {

@@ -147,6 +147,13 @@ pub fn synthesis_prompt(
          - Add an image block (url plus a short caption) when a finding carries an \
          image_url worth showing; use only image_url values from the findings, never \
          another URL.\n\
+         - Add a conflict block ONLY when the findings genuinely disagree: two or more \
+         sources making incompatible claims about the same fact. Give each position its \
+         own claim and source_ids, and set kind to \"direct\" for a flat contradiction, \
+         \"temporal\" when the sources describe different points in time, \"indirect\" when \
+         they are inconsistent only taken together. Never manufacture a disagreement to \
+         fill the block, and never use it to contrast a source with your own knowledge.\n\
+         {source_notes_rule}\
          - Keep prose tight: prefer short paragraphs, lists, tables, charts, and diagrams \
          over long text.\n\
          - Optionally set emphasis to \"highlight\" on the single block that carries the key \
@@ -159,8 +166,18 @@ pub fn synthesis_prompt(
         context_block = context_prompt_block(context),
         answer_lang = plan.answer_lang,
         findings_json = findings_json(merged),
+        source_notes_rule = source_notes_rule(plan.mode.spec()),
         output_contract = output_contract(inline_schema),
     )
+}
+
+fn source_notes_rule(mode: &ModeSpec) -> String {
+    if !mode.source_notes {
+        return String::new();
+    }
+    "         - When a source is contested, dated, or partisan, set its note to one short \
+     clause saying why a reader should weigh it carefully. Leave note empty otherwise.\n"
+        .to_string()
 }
 
 fn findings_json(merged: &MergedFindings) -> String {
@@ -310,6 +327,7 @@ mod tests {
             url: "https://www.rust-lang.org/".to_string(),
             snippet: "A language empowering everyone.".to_string(),
             engine: "ddg",
+            ..Default::default()
         }];
         let prompt = sub_search_prompt(&sub, Mode::General.spec(), &hits, &[]);
         assert!(prompt.contains(SUB_SEARCH_MARKER));
@@ -384,6 +402,7 @@ mod tests {
             url: "https://www.rust-lang.org/".to_string(),
             snippet: "A language empowering everyone.".to_string(),
             engine: "ddg",
+            ..Default::default()
         }];
         let pages = [PageText {
             url: "https://www.rust-lang.org/".to_string(),

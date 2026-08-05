@@ -144,6 +144,7 @@ mod tests {
                     url: (*url).to_string(),
                     lang: "en".to_string(),
                     status: None,
+                    ..Default::default()
                 })
                 .collect(),
             ..Answer::default()

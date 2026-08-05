@@ -813,6 +813,7 @@ mod tests {
                     url: "https://one.example".to_string(),
                     lang: "en".to_string(),
                     status: None,
+                    ..Default::default()
                 },
                 Source {
                     id: 2,
@@ -820,6 +821,7 @@ mod tests {
                     url: "https://two.example".to_string(),
                     lang: "en".to_string(),
                     status: None,
+                    ..Default::default()
                 },
             ],
             ..Answer::default()

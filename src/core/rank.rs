@@ -90,6 +90,7 @@ mod tests {
             url: url.to_string(),
             snippet: snippet.to_string(),
             engine: "ddg",
+            ..Default::default()
         }
     }
 

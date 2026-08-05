@@ -152,6 +152,15 @@ fn block_text(block: &Block) -> String {
                 .collect();
             format!(" {title}{labels}")
         }
+        Block::Conflict {
+            topic, positions, ..
+        } => {
+            let claims: String = positions
+                .iter()
+                .map(|position| format!(" {}", position.claim))
+                .collect();
+            format!(" {topic}{claims}")
+        }
         Block::Image { caption, .. } => format!(" {caption}"),
         Block::Unknown => String::new(),
     }
@@ -246,6 +255,7 @@ mod tests {
             url: url.to_string(),
             lang: "en".to_string(),
             status,
+            ..Default::default()
         }
     }
 

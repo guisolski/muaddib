@@ -1,4 +1,5 @@
-use crate::core::answer::{Answer, Block, ListItem, Source};
+use crate::core::answer::{Answer, Block, ConflictPosition, ListItem, Source};
+use crate::core::credibility::{SourceClass, sole_support_sources, source_badge};
 use crate::pipeline::LinkStatus;
 use crate::tui::search_state::ImageFetch;
 use crate::tui::theme;
@@ -7,6 +8,7 @@ use crate::tui::widgets::diagram::diagram_lines;
 use crate::tui::widgets::textwrap::wrap_text;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,6 +141,7 @@ pub fn render_doc(
         append_sources(
             &mut lines,
             &answer.sources,
+            &sole_support_sources(answer),
             links,
             selection,
             anim.source_overlay,
@@ -226,6 +229,9 @@ fn append_block(
                 lines.push(Line::raw(row));
             }
         }
+        Block::Conflict {
+            topic, positions, ..
+        } => append_conflict(lines, topic, positions, text_width),
         Block::Image {
             url,
             caption,
@@ -346,6 +352,37 @@ fn append_quote(lines: &mut Vec<Line<'static>>, text: &str, source_ids: &[u32], 
     }
 }
 
+fn append_conflict(
+    lines: &mut Vec<Line<'static>>,
+    topic: &str,
+    positions: &[ConflictPosition],
+    text_width: usize,
+) {
+    lines.push(Line::from(vec![
+        Span::styled("\u{26a0} ", theme::conflict()),
+        Span::styled(
+            format!("Sources disagree \u{2014} {topic}"),
+            theme::conflict(),
+        ),
+    ]));
+    let last = positions.len().saturating_sub(1);
+    for (index, position) in positions.iter().enumerate() {
+        let branch = if index == last {
+            "\u{2514}"
+        } else {
+            "\u{251c}"
+        };
+        append_cited_text(
+            lines,
+            &position.claim,
+            &position.source_ids,
+            text_width.saturating_sub(4).max(4),
+            &format!("  {branch} "),
+            "    ",
+        );
+    }
+}
+
 fn append_table(
     lines: &mut Vec<Line<'static>>,
     headers: &[String],
@@ -377,6 +414,7 @@ fn citation_span(source_ids: &[u32]) -> Span<'static> {
 fn append_sources(
     lines: &mut Vec<Line<'static>>,
     sources: &[Source],
+    sole: &BTreeSet<u32>,
     links: &HashMap<u32, LinkStatus>,
     selection: DocSelection,
     overlay: Option<(usize, Style)>,
@@ -393,7 +431,12 @@ fn append_sources(
             let mut line = Line::from(vec![
                 Span::styled(format!("[{}] ", source.id), theme::citation()),
                 link_glyph(links.get(&source.id).copied()),
-                Span::raw(format!(" {} — ", source.title)),
+                Span::styled(
+                    format!(" {} ", source_badge(source)),
+                    class_style(source.class),
+                ),
+                sole_support_span(sole.contains(&source.id)),
+                Span::raw(format!("{} — ", source.title)),
                 Span::styled(source.url.clone(), theme::dim()),
                 Span::styled(format!(" ({})", source.lang), theme::dim()),
             ]);
@@ -412,6 +455,22 @@ fn append_sources(
             }
         })
         .collect()
+}
+
+fn class_style(class: SourceClass) -> Style {
+    match class {
+        SourceClass::PeerReviewed | SourceClass::Institutional => theme::ok(),
+        SourceClass::Reference | SourceClass::Press => theme::citation(),
+        SourceClass::Community | SourceClass::Unknown => theme::dim(),
+    }
+}
+
+fn sole_support_span(sole: bool) -> Span<'static> {
+    if sole {
+        Span::styled("! ", theme::warn())
+    } else {
+        Span::raw("")
+    }
 }
 
 fn link_glyph(status: Option<LinkStatus>) -> Span<'static> {
@@ -618,6 +677,7 @@ mod tests {
                     url: "https://one.example".to_string(),
                     lang: "en".to_string(),
                     status: None,
+                    ..Default::default()
                 },
                 Source {
                     id: 2,
@@ -625,6 +685,7 @@ mod tests {
                     url: "https://two.example".to_string(),
                     lang: "en".to_string(),
                     status: None,
+                    ..Default::default()
                 },
             ],
             followups: vec!["next".to_string()],
@@ -855,8 +916,8 @@ mod tests {
         assert!(joined.contains("● Search"));
         assert!(joined.contains("▨ Figure [1]"));
         assert!(joined.contains("fetching image…"));
-        assert!(joined.contains("[1] ✓ One — https://one.example (en)"));
-        assert!(joined.contains("[2] ✗ 404 Two — https://two.example (en)"));
+        assert!(joined.contains("[1] ✓ · ! One — https://one.example (en)"));
+        assert!(joined.contains("[2] ✗ 404 · ! Two — https://two.example (en)"));
         assert!(joined.contains("→ next"));
     }
 
@@ -869,7 +930,91 @@ mod tests {
             .map(|line| text_of(line))
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(joined.contains("[1] · One"));
+        assert!(joined.contains("[1] · · ! One"), "{joined}");
+    }
+
+    #[test]
+    fn a_conflict_block_renders_as_a_warning_with_branches() {
+        let answer = Answer {
+            title: "t".to_string(),
+            blocks: vec![Block::Conflict {
+                topic: "projected capacity".to_string(),
+                kind: crate::core::answer::ConflictKind::Direct,
+                positions: vec![
+                    ConflictPosition {
+                        claim: "IEA reports 4.1 TW".to_string(),
+                        source_ids: vec![1],
+                    },
+                    ConflictPosition {
+                        claim: "IRENA reports 3.4 TW".to_string(),
+                        source_ids: vec![2],
+                    },
+                ],
+                emphasis: Emphasis::None,
+            }],
+            ..Answer::default()
+        };
+        let doc = render_settled(&answer, 60, &HashMap::new(), DocSelection::None);
+        let joined = doc
+            .lines
+            .iter()
+            .map(|line| text_of(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("\u{26a0} Sources disagree \u{2014} projected capacity"));
+        assert!(
+            joined.contains("\u{251c} IEA reports 4.1 TW [1]"),
+            "{joined}"
+        );
+        assert!(
+            joined.contains("\u{2514} IRENA reports 3.4 TW [2]"),
+            "{joined}"
+        );
+    }
+
+    #[test]
+    fn a_credible_dated_source_shows_its_class_and_year() {
+        let answer = Answer {
+            title: "t".to_string(),
+            blocks: vec![Block::Paragraph {
+                text: "cited by two".to_string(),
+                source_ids: vec![1, 2],
+                emphasis: Emphasis::None,
+            }],
+            sources: vec![
+                Source {
+                    id: 1,
+                    title: "Paper".to_string(),
+                    url: "https://doi.org/10.1/x".to_string(),
+                    lang: "en".to_string(),
+                    class: SourceClass::PeerReviewed,
+                    published: Some(2024),
+                    ..Default::default()
+                },
+                Source {
+                    id: 2,
+                    title: "Blog".to_string(),
+                    url: "https://medium.com/p".to_string(),
+                    lang: "en".to_string(),
+                    class: SourceClass::Community,
+                    ..Default::default()
+                },
+            ],
+            ..Answer::default()
+        };
+        let doc = render_settled(&answer, 80, &HashMap::new(), DocSelection::None);
+        let joined = doc
+            .lines
+            .iter()
+            .map(|line| text_of(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("\u{2b22} 2024"), "{joined}");
+        assert!(joined.contains("\u{25cc}"), "{joined}");
+        assert!(
+            !joined.contains('!'),
+            "corroborated sources carry no warning: {joined}"
+        );
     }
 
     #[test]

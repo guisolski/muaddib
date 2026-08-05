@@ -1,4 +1,5 @@
 use crate::core::citations::LinkStatus;
+use crate::core::credibility::SourceClass;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -70,6 +71,14 @@ pub enum Block {
         items: Vec<DiagramItem>,
         #[serde(default)]
         source_ids: Vec<u32>,
+        #[serde(default)]
+        emphasis: Emphasis,
+    },
+    Conflict {
+        topic: String,
+        #[serde(default)]
+        kind: ConflictKind,
+        positions: Vec<ConflictPosition>,
         #[serde(default)]
         emphasis: Emphasis,
     },
@@ -147,6 +156,32 @@ fn from_matching_str<T>(raw: &str, needle: &str, matched: T, default: T) -> T {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase", from = "String")]
+pub enum ConflictKind {
+    #[default]
+    Direct,
+    Temporal,
+    Indirect,
+}
+
+impl From<String> for ConflictKind {
+    fn from(raw: String) -> Self {
+        if raw.eq_ignore_ascii_case("temporal") {
+            Self::Temporal
+        } else {
+            from_matching_str(&raw, "indirect", Self::Indirect, Self::Direct)
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConflictPosition {
+    pub claim: String,
+    #[serde(default)]
+    pub source_ids: Vec<u32>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ListItem {
     pub text: String,
@@ -154,7 +189,7 @@ pub struct ListItem {
     pub source_ids: Vec<u32>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Source {
     pub id: u32,
     #[serde(default)]
@@ -164,6 +199,12 @@ pub struct Source {
     pub lang: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<LinkStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub published: Option<u16>,
+    #[serde(default)]
+    pub class: SourceClass,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub note: String,
 }
 
 pub fn parse_answer(value: serde_json::Value) -> Result<Answer, serde_json::Error> {
@@ -191,7 +232,8 @@ pub const ANSWER_SCHEMA: &str = r##"{
         "id": {"type": "integer", "minimum": 1},
         "title": {"type": "string"},
         "url": {"type": "string"},
-        "lang": {"type": "string"}
+        "lang": {"type": "string"},
+        "note": {"type": "string"}
       }
     },
     "block": {
@@ -295,6 +337,28 @@ pub const ANSWER_SCHEMA: &str = r##"{
         },
         {
           "type": "object",
+          "required": ["type", "topic", "positions"],
+          "properties": {
+            "type": {"const": "conflict"},
+            "topic": {"type": "string"},
+            "kind": {"enum": ["direct", "temporal", "indirect"]},
+            "positions": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "object",
+                "required": ["claim", "source_ids"],
+                "properties": {
+                  "claim": {"type": "string"},
+                  "source_ids": {"$ref": "#/definitions/source_ids"}
+                }
+              }
+            },
+            "emphasis": {"$ref": "#/definitions/emphasis"}
+          }
+        },
+        {
+          "type": "object",
           "required": ["type", "url", "source_ids"],
           "properties": {
             "type": {"const": "image"},
@@ -381,6 +445,99 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn conflict_kind_degrades_to_direct_for_anything_unrecognized() {
+        struct Case {
+            name: &'static str,
+            input: &'static str,
+            want: ConflictKind,
+        }
+        let cases = [
+            Case {
+                name: "direct",
+                input: "direct",
+                want: ConflictKind::Direct,
+            },
+            Case {
+                name: "temporal",
+                input: "temporal",
+                want: ConflictKind::Temporal,
+            },
+            Case {
+                name: "indirect",
+                input: "indirect",
+                want: ConflictKind::Indirect,
+            },
+            Case {
+                name: "case insensitive",
+                input: "TEMPORAL",
+                want: ConflictKind::Temporal,
+            },
+            Case {
+                name: "unknown degrades",
+                input: "sideways",
+                want: ConflictKind::Direct,
+            },
+            Case {
+                name: "empty degrades",
+                input: "",
+                want: ConflictKind::Direct,
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                ConflictKind::from(case.input.to_string()),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_conflict_block_round_trips_through_the_answer_schema() {
+        let value = json!({
+            "title": "t",
+            "language": "en",
+            "blocks": [{
+                "type": "conflict",
+                "topic": "capacity",
+                "kind": "temporal",
+                "positions": [
+                    {"claim": "a", "source_ids": [1]},
+                    {"claim": "b", "source_ids": [2]}
+                ]
+            }],
+            "sources": []
+        });
+        let answer = parse_answer(value).unwrap();
+        let Block::Conflict {
+            topic,
+            kind,
+            positions,
+            ..
+        } = &answer.blocks[0]
+        else {
+            panic!("expected a conflict block, got {:?}", answer.blocks[0]);
+        };
+        assert_eq!(topic, "capacity");
+        assert_eq!(*kind, ConflictKind::Temporal);
+        assert_eq!(positions.len(), 2);
+        assert_eq!(positions[1].source_ids, vec![2]);
+    }
+
+    #[test]
+    fn the_conflict_block_is_declared_in_the_full_schema_only() {
+        let schema: serde_json::Value = serde_json::from_str(ANSWER_SCHEMA).unwrap();
+        let variants = schema["definitions"]["block"]["oneOf"].as_array().unwrap();
+        assert!(
+            variants
+                .iter()
+                .any(|variant| variant["properties"]["type"]["const"] == "conflict")
+        );
+        assert!(!FAST_ANSWER_SCHEMA.contains("conflict"));
+    }
+
     fn sample_answer() -> Answer {
         Answer {
             title: "Sample".to_string(),
@@ -428,6 +585,7 @@ mod tests {
                 url: "https://example.com".to_string(),
                 lang: "en".to_string(),
                 status: None,
+                ..Default::default()
             }],
             followups: vec!["related query".to_string()],
         }

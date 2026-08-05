@@ -5,6 +5,7 @@ use crate::core::citations::{
 };
 use crate::core::config::{Config, WebSearchConfig};
 use crate::core::context::{ResearchContext, context_allowed_urls};
+use crate::core::credibility::annotate_sources;
 use crate::core::extract::extract_json;
 use crate::core::mode::{Mode, ModeSpec};
 use crate::core::plan::{
@@ -337,7 +338,7 @@ async fn synthesis_stage(
         .into_iter()
         .chain(context_allowed_urls(&request.context))
         .collect();
-    Ok(renumber_sources(answer, &allowed))
+    Ok(annotate_sources(renumber_sources(answer, &allowed), hits))
 }
 
 #[cfg(feature = "websearch")]
@@ -594,6 +595,7 @@ mod tests {
             url: url.to_string(),
             snippet: snippet.to_string(),
             engine: "ddg",
+            ..Default::default()
         }
     }
 

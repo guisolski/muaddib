@@ -62,12 +62,13 @@ pub struct WebEngineSpec {
     pub fallback: Option<WebEngineId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WebHit {
     pub title: String,
     pub url: String,
     pub snippet: String,
     pub engine: &'static str,
+    pub published: Option<u16>,
 }
 
 pub const WEB_ENGINES: &[WebEngineSpec] = &[
@@ -461,10 +462,12 @@ mod parse {
     use serde_json::Value;
     use std::collections::BTreeSet;
 
+    #[derive(Default)]
     struct RawHit {
         title: String,
         url: String,
         snippet: String,
+        published: Option<u16>,
     }
 
     pub fn parse_hits(spec: &'static WebEngineSpec, body: &str, max: usize) -> Vec<WebHit> {
@@ -493,6 +496,7 @@ mod parse {
                 url: hit.url,
                 snippet: truncate_snippet(&hit.snippet),
                 engine,
+                published: hit.published,
             })
             .collect()
     }
@@ -554,6 +558,7 @@ mod parse {
             title: element_text(&link),
             url,
             snippet,
+            ..Default::default()
         })
     }
 
@@ -587,6 +592,7 @@ mod parse {
                     title: element_text(&link),
                     url,
                     snippet: snippets.get(index).cloned().unwrap_or_default(),
+                    ..Default::default()
                 })
             })
             .collect()
@@ -616,6 +622,7 @@ mod parse {
                 title,
                 url,
                 snippet,
+                ..Default::default()
             })
         })
     }
@@ -654,6 +661,7 @@ mod parse {
             title: non_empty_str(item.get("title"))?,
             url: non_empty_str(item.get("url"))?,
             snippet: non_empty_str(item.get("content")).unwrap_or_default(),
+            ..Default::default()
         })
     }
 
@@ -666,7 +674,8 @@ mod parse {
         let url = non_empty_str(item.get("doi"))
             .or_else(|| non_empty_str(item.pointer("/primary_location/landing_page_url")))?;
         let venue = non_empty_str(item.pointer("/primary_location/source/display_name"));
-        let year = json_year(item.get("publication_year"));
+        let published = published_year(item.get("publication_year"));
+        let year = published.map(|year| year.to_string());
         let authors = item
             .get("authorships")
             .and_then(Value::as_array)
@@ -681,6 +690,7 @@ mod parse {
             title,
             url,
             snippet: academic_snippet(venue, year, authors),
+            published,
         })
     }
 
@@ -692,7 +702,8 @@ mod parse {
         let title = non_empty_str(item.pointer("/title/0"))?;
         let url = non_empty_str(item.get("URL"))?;
         let venue = non_empty_str(item.pointer("/container-title/0"));
-        let year = json_year(item.pointer("/issued/date-parts/0/0"));
+        let published = published_year(item.pointer("/issued/date-parts/0/0"));
+        let year = published.map(|year| year.to_string());
         let authors = item.get("author").and_then(Value::as_array).map(|list| {
             list.iter()
                 .filter_map(crossref_author)
@@ -704,6 +715,7 @@ mod parse {
             title,
             url,
             snippet: academic_snippet(venue, year, authors),
+            published,
         })
     }
 
@@ -725,10 +737,11 @@ mod parse {
             non_empty_str(item.pointer("/externalIds/DOI"))
                 .map(|doi| format!("https://doi.org/{doi}"))
         })?;
+        let published = published_year(item.get("year"));
         let snippet = non_empty_str(item.get("abstract")).unwrap_or_else(|| {
             academic_snippet(
                 non_empty_str(item.get("venue")),
-                json_year(item.get("year")),
+                published.map(|year| year.to_string()),
                 None,
             )
         });
@@ -736,11 +749,15 @@ mod parse {
             title,
             url,
             snippet,
+            published,
         })
     }
 
-    fn json_year(value: Option<&Value>) -> Option<String> {
-        value.and_then(Value::as_u64).map(|year| year.to_string())
+    fn published_year(value: Option<&Value>) -> Option<u16> {
+        value
+            .and_then(Value::as_u64)
+            .and_then(|year| u16::try_from(year).ok())
+            .filter(|year| (1000..=3000).contains(year))
     }
 
     fn non_empty_str(value: Option<&Value>) -> Option<String> {
@@ -1272,6 +1289,7 @@ mod tests {
             url: url.to_string(),
             snippet: snippet.to_string(),
             engine: "ddg",
+            ..Default::default()
         }
     }
 

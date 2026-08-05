@@ -3,6 +3,7 @@ pub mod citations;
 pub mod config;
 pub mod context;
 pub mod cost;
+pub mod credibility;
 pub mod engine;
 pub mod eval;
 pub mod export;

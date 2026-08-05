@@ -251,6 +251,9 @@ pub fn block_source_id_slots(blocks: &[Block]) -> Vec<&Vec<u32>> {
             Block::List { items, .. } => {
                 slots.extend(items.iter().map(|item| &item.source_ids));
             }
+            Block::Conflict { positions, .. } => {
+                slots.extend(positions.iter().map(|position| &position.source_ids));
+            }
             Block::Heading { .. } | Block::Unknown => {}
         }
     }
@@ -269,6 +272,13 @@ fn block_source_id_slots_mut(blocks: &mut [Block]) -> Vec<&mut Vec<u32>> {
             | Block::Image { source_ids, .. } => slots.push(source_ids),
             Block::List { items, .. } => {
                 slots.extend(items.iter_mut().map(|item| &mut item.source_ids));
+            }
+            Block::Conflict { positions, .. } => {
+                slots.extend(
+                    positions
+                        .iter_mut()
+                        .map(|position| &mut position.source_ids),
+                );
             }
             Block::Heading { .. } | Block::Unknown => {}
         }
@@ -316,6 +326,7 @@ mod tests {
             url: url.to_string(),
             lang: "en".to_string(),
             status: None,
+            ..Default::default()
         }
     }
 

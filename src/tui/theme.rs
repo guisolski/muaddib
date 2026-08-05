@@ -42,6 +42,10 @@ pub fn selected() -> Style {
     Style::new().add_modifier(Modifier::REVERSED)
 }
 
+pub fn conflict() -> Style {
+    Style::new().fg(WARN).add_modifier(Modifier::BOLD)
+}
+
 pub fn quote() -> Style {
     Style::new().fg(DIM).add_modifier(Modifier::ITALIC)
 }
