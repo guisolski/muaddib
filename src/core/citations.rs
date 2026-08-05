@@ -238,7 +238,7 @@ fn relabeled_source(source: &Source, new_id: u32) -> Source {
     }
 }
 
-fn block_source_id_slots(blocks: &[Block]) -> Vec<&Vec<u32>> {
+pub fn block_source_id_slots(blocks: &[Block]) -> Vec<&Vec<u32>> {
     let mut slots = Vec::new();
     for block in blocks {
         match block {

@@ -18,6 +18,7 @@ make test
 | `make lint` | clippy, all targets, `-D warnings` |
 | `make fmt` / `make fmt-check` | rustfmt |
 | `make precommit` | run every pre-commit hook against all files |
+| `make eval` | score the golden queries against a **real** AI CLI and rewrite `docs/eval-baseline.md` |
 | `make ci` | exactly what CI runs: fmt-check + lint + test + release |
 | `make install` | `cargo install --path .` |
 
@@ -64,6 +65,33 @@ Test layers:
 | unit | `#[cfg(test)]` in each module | all pure core, parsing, widgets, reducer |
 | integration | `tests/pipeline_integration.rs` | full pipeline over real subprocesses |
 | smoke | `tests/cli_smoke.rs` | the compiled binary, `--print` mode, exit codes |
+
+## Measuring answer quality
+
+`cargo test` proves the pipeline behaves. It cannot prove the answers are good,
+because the fake engine returns fixed fixtures. That is what `make eval` is for
+(ADR-0012):
+
+```sh
+make eval        # runs tests/fixtures/eval/cases.toml against your configured engine
+```
+
+It drives the same `spawn_search` the binary uses, scores each answer with the pure
+metrics in `core/eval.rs`, and rewrites `docs/eval-baseline.md`.
+
+| Metric | What a regression looks like |
+|---|---|
+| uncited blocks | the model started asserting things without a source |
+| broken links | the anti-hallucination gate is letting invented URLs through |
+| expected-domain coverage | grounding stopped reaching the obvious authority |
+| expected-mention coverage | the answer stopped containing the actual answer |
+| wall clock / cost | a prompt got fatter without paying for itself |
+
+**Commit the baseline.** The regression signal is the diff in a tracked file during
+review; an uncommitted score changes nobody's mind. Run it before and after any change
+to prompts, `ANSWER_SCHEMA`, or the grounding stages.
+
+CI never runs this — it needs a real CLI, real money, and real time.
 
 ## Live testing
 

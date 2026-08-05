@@ -1,0 +1,27 @@
+[[cases]]
+query = "rust async runtime tradeoffs"
+mode = "general"
+expect_domains = ["tokio.rs"]
+expect_mentions = ["Tokio", "async"]
+
+[[cases]]
+query = "capital of peru"
+mode = "general"
+expect_mentions = ["Lima"]
+
+[[cases]]
+query = "CRISPR base editing off-target effects"
+mode = "scientific"
+expect_domains = ["doi.org"]
+expect_mentions = ["CRISPR"]
+
+[[cases]]
+query = "tokio select macro cancellation safety"
+mode = "code"
+expect_domains = ["tokio.rs"]
+expect_mentions = ["select", "cancel"]
+
+[[cases]]
+query = "history of the transistor"
+mode = "deep"
+expect_mentions = ["Bell", "1947"]

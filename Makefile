@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help all build release run test check fmt fmt-check lint clean install doc hooks precommit ci
+.PHONY: help all build release run test eval check fmt fmt-check lint clean install doc hooks precommit ci
 
 help: ## Show this help (default target)
 	@awk 'BEGIN {FS = ":.*## "; printf "\nmuaddib — make targets\n\n"} /^[a-zA-Z_-]+:.*## / {printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2} END {print ""}' $(MAKEFILE_LIST)
@@ -18,6 +18,9 @@ run: ## Launch the TUI (debug build)
 
 test: ## Run the full test suite with all features
 	cargo test --all-features
+
+eval: ## Score the golden queries against a real AI CLI and rewrite docs/eval-baseline.md
+	cargo test --test eval_live --all-features -- --ignored --nocapture
 
 check: ## Type-check every target without building
 	cargo check --all-targets --all-features

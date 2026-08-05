@@ -4,6 +4,7 @@ pub mod config;
 pub mod context;
 pub mod cost;
 pub mod engine;
+pub mod eval;
 pub mod export;
 pub mod extract;
 pub mod history;
