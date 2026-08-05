@@ -22,7 +22,10 @@ use std::sync::Arc;
 struct Cli {
     query: Option<String>,
 
-    #[arg(long, help = "Search mode: general, scientific, news, or deep")]
+    #[arg(
+        long,
+        help = "Search mode: general, scientific, news, code, forums, or deep"
+    )]
     mode: Option<Mode>,
 
     #[arg(long, help = "Engine CLI to use for this run")]

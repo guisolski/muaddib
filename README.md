@@ -78,8 +78,9 @@ instinct) — the mouse kept the nose.
 
 ## Features
 
-- Minimalist TUI: one centered search bar, four focus modes (`General`, `Scientific`,
-  `News`, `Deep`)
+- Minimalist TUI: one centered search bar, six focus modes (`General`, `Scientific`,
+  `News`, `Code`, `Forums`, `Deep`) — `Code` biases the web search toward
+  documentation and repositories, `Forums` toward what practitioners actually report
 - Multilingual query expansion with a deterministic offline fallback
 - Built-in web-search grounding, in-binary and keyless: candidate results from
   DuckDuckGo, Bing, and Mojeek — plus OpenAlex, Crossref, and Semantic Scholar in

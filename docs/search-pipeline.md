@@ -35,7 +35,8 @@ each row, guarantees the original query is included first, and truncates to
 breadth. **Any failure degrades, never aborts**: a per-mode fallback facet table
 (`fallback_expansion`) produces a deterministic plan offline.
 
-Breadth comes from the mode (`General` 3, `Scientific` 4, `News` 3, `Deep` 6)
+Breadth comes from the mode (`General` 3, `Scientific` 4, `News` 3, `Code` 3,
+`Forums` 3, `Deep` 6)
 unless `expansion_breadth` overrides it (1–8). A `"simple"` complexity rating —
 the model judging that one direct search fully answers the query — narrows the
 plan to a single sub-query, so synthesis gets a small findings payload. An
@@ -51,8 +52,9 @@ With `[websearch] enabled = true` (default; forced off in fast mode and by
 `--no-websearch`), each sub-query is first run against conventional search
 engines and — in Scientific mode — scholarly APIs, all declared as rows in the
 `WEB_ENGINES` table (`core/websearch.rs`). Engines are walked as a waterfall
-per sub-query (DuckDuckGo falls back to its lite endpoint; academic engines
-come first in Scientific mode), over-fetching a pool of `max_hits_per_query ×
+per sub-query (a configured SearXNG instance leads; DuckDuckGo falls back to its
+lite endpoint; academic engines come first in Scientific mode; an engine whose
+URL cannot be resolved is skipped), over-fetching a pool of `max_hits_per_query ×
 3` deduplicated hits, with 2 sub-queries in flight, a 3s per-request timeout,
 and a 5s per-sub-query deadline that keeps whatever partial hits arrived. The
 pool is then ranked against the sub-query with BM25 (`core/rank.rs` — pure
@@ -60,6 +62,11 @@ lexical scoring over title-doubled-plus-snippet token bags, stable ties keep
 engine order) and truncated to `max_hits_per_query`, so the surviving hits are
 the most relevant of the pool rather than the first encountered (ADR-0008).
 One `WebHits { count }` event reports the total.
+
+Modes that declare `site_hints` (`Code`, `Forums`) send a widened query to the web
+engines only — `web_query` appends `(site:a OR site:b)` — while the AI sub-search
+prompt and the BM25 reranking both keep the plain query, so the operators steer
+retrieval without polluting either the model's prompt or the lexical score.
 
 The hits ground the next stage: each sub-search prompt gains a "candidate
 sources" block (title, URL, snippet) the AI is told to verify before citing,

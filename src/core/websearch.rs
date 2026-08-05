@@ -212,6 +212,18 @@ const MODE_WEB_ENGINES: &[(Mode, &[WebEngineId])] = &[
         &[WebEngineId::DuckDuckGoHtml, WebEngineId::Bing],
     ),
     (
+        Mode::Code,
+        &[
+            WebEngineId::DuckDuckGoHtml,
+            WebEngineId::Bing,
+            WebEngineId::Mojeek,
+        ],
+    ),
+    (
+        Mode::Forums,
+        &[WebEngineId::DuckDuckGoHtml, WebEngineId::Bing],
+    ),
+    (
         Mode::Deep,
         &[
             WebEngineId::DuckDuckGoHtml,
@@ -220,6 +232,14 @@ const MODE_WEB_ENGINES: &[(Mode, &[WebEngineId])] = &[
         ],
     ),
 ];
+
+pub fn web_query(sub_query: &str, mode: Mode) -> String {
+    let hints = mode.spec().site_hints;
+    if hints.is_empty() {
+        return sub_query.to_string();
+    }
+    format!("{sub_query} ({})", hints.join(" OR "))
+}
 
 pub fn engine_by_name(name: &str) -> Option<&'static WebEngineSpec> {
     WEB_ENGINES.iter().find(|spec| spec.name == name)
@@ -793,6 +813,59 @@ mod tests {
                 engines.iter().all(|spec| spec.id != WebEngineId::Google),
                 "{mode}"
             );
+        }
+    }
+
+    #[test]
+    fn web_query_adds_site_hints_only_for_modes_that_declare_them() {
+        struct Case {
+            name: &'static str,
+            mode: Mode,
+            want: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "general searches the open web",
+                mode: Mode::General,
+                want: "tokio select",
+            },
+            Case {
+                name: "deep searches the open web",
+                mode: Mode::Deep,
+                want: "tokio select",
+            },
+            Case {
+                name: "code narrows to documentation and repositories",
+                mode: Mode::Code,
+                want: "tokio select (site:stackoverflow.com OR site:github.com OR site:docs.rs)",
+            },
+            Case {
+                name: "forums narrows to discussion sites",
+                mode: Mode::Forums,
+                want: "tokio select (site:reddit.com OR site:news.ycombinator.com OR site:lobste.rs)",
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                web_query("tokio select", case.mode),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_mode_with_site_hints_keeps_them_out_of_the_ai_sub_query() {
+        for mode in Mode::all() {
+            let plain = "quantum computing";
+            let spec = mode.spec();
+            if spec.site_hints.is_empty() {
+                assert_eq!(web_query(plain, mode), plain, "{mode}");
+            } else {
+                assert!(web_query(plain, mode).starts_with(plain), "{mode}");
+                assert!(web_query(plain, mode).contains("site:"), "{mode}");
+            }
         }
     }
 

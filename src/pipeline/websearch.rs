@@ -1,9 +1,10 @@
 use crate::core::citations::normalize_url;
 use crate::core::config::WebSearchConfig;
+use crate::core::mode::Mode;
 use crate::core::plan::SearchPlan;
 use crate::core::rank::{pool_budget, rank_hits};
 use crate::core::websearch::{
-    WebEngineSpec, WebHit, engines_for_mode, fallback_engine, resolve_url,
+    WebEngineSpec, WebHit, engines_for_mode, fallback_engine, resolve_url, web_query,
 };
 use crate::pipeline::SearchEvent;
 use futures::stream::{self, StreamExt};
@@ -195,7 +196,7 @@ pub async fn websearch_stage(
     let query_futures: Vec<_> = plan
         .sub_queries
         .iter()
-        .map(|sub| query_hits(fetcher, &engines, &sub.query, config))
+        .map(|sub| query_hits(fetcher, &engines, &sub.query, plan.mode, config))
         .collect();
     let per_query: Vec<Vec<WebHit>> = stream::iter(query_futures)
         .buffered(CONCURRENT_WEB_QUERIES)
@@ -224,9 +225,11 @@ async fn query_hits(
     fetcher: &dyn WebFetcher,
     engines: &[&'static WebEngineSpec],
     query: &str,
+    mode: Mode,
     config: &WebSearchConfig,
 ) -> Vec<WebHit> {
     let deadline = tokio::time::Instant::now() + WEB_QUERY_TIMEOUT;
+    let engine_query = web_query(query, mode);
     let budget = usize::from(config.max_hits_per_query);
     let pool_target = pool_budget(budget);
     let mut pool: Vec<WebHit> = Vec::new();
@@ -242,7 +245,14 @@ async fn query_hits(
         };
         let engine_hits = tokio::time::timeout(
             time_left,
-            engine_hits_with_fallback(fetcher, spec, &base_url, query, &config.mailto, remaining),
+            engine_hits_with_fallback(
+                fetcher,
+                spec,
+                &base_url,
+                &engine_query,
+                &config.mailto,
+                remaining,
+            ),
         )
         .await
         .unwrap_or_default();

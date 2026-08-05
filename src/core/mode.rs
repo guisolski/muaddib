@@ -8,6 +8,8 @@ pub enum Mode {
     General,
     Scientific,
     News,
+    Code,
+    Forums,
     Deep,
 }
 
@@ -19,6 +21,7 @@ pub struct ModeSpec {
     pub cross_language: bool,
     pub instructions: &'static str,
     pub facets: &'static [&'static str],
+    pub site_hints: &'static [&'static str],
 }
 
 pub const MODES: &[ModeSpec] = &[
@@ -37,6 +40,7 @@ pub const MODES: &[ModeSpec] = &[
             "comparison with alternatives",
             "frequently asked questions",
         ],
+        site_hints: &[],
     },
     ModeSpec {
         mode: Mode::Scientific,
@@ -53,6 +57,7 @@ pub const MODES: &[ModeSpec] = &[
             "datasets and benchmarks",
             "replication studies",
         ],
+        site_hints: &[],
     },
     ModeSpec {
         mode: Mode::News,
@@ -68,6 +73,45 @@ pub const MODES: &[ModeSpec] = &[
             "regional coverage",
             "fact check",
             "economic impact",
+        ],
+        site_hints: &[],
+    },
+    ModeSpec {
+        mode: Mode::Code,
+        label: "Code",
+        breadth: 3,
+        cross_language: false,
+        instructions: "Answer from official documentation, source repositories, and accepted answers. Prefer the current stable version, name it, and show minimal runnable snippets over prose.",
+        facets: &[
+            "official documentation",
+            "api reference",
+            "common errors and fixes",
+            "best practices",
+            "performance considerations",
+            "migration and breaking changes",
+            "real-world usage examples",
+        ],
+        site_hints: &["site:stackoverflow.com", "site:github.com", "site:docs.rs"],
+    },
+    ModeSpec {
+        mode: Mode::Forums,
+        label: "Forums",
+        breadth: 3,
+        cross_language: true,
+        instructions: "Gather what practitioners actually report: first-hand experience, recurring complaints, and workarounds. Attribute opinions to the community rather than stating them as fact, and note when a thread is old.",
+        facets: &[
+            "user experiences",
+            "common complaints",
+            "recommendations",
+            "head-to-head comparisons",
+            "workarounds",
+            "recent discussions",
+            "expert replies",
+        ],
+        site_hints: &[
+            "site:reddit.com",
+            "site:news.ycombinator.com",
+            "site:lobste.rs",
         ],
     },
     ModeSpec {
@@ -85,6 +129,7 @@ pub const MODES: &[ModeSpec] = &[
             "case studies",
             "expert opinions",
         ],
+        site_hints: &[],
     },
 ];
 

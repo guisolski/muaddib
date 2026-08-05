@@ -124,18 +124,61 @@ fn clamp_u16(value: usize) -> u16 {
     u16::try_from(value).unwrap_or(u16::MAX)
 }
 
+struct ModesLayout {
+    separator: &'static str,
+    label_chars: Option<usize>,
+}
+
+const MODES_LAYOUTS: &[ModesLayout] = &[
+    ModesLayout {
+        separator: " · ",
+        label_chars: None,
+    },
+    ModesLayout {
+        separator: "·",
+        label_chars: None,
+    },
+    ModesLayout {
+        separator: "·",
+        label_chars: Some(4),
+    },
+];
+
+fn abbreviate(label: &str, layout: &ModesLayout) -> String {
+    match layout.label_chars {
+        Some(max) => label.chars().take(max).collect(),
+        None => label.to_string(),
+    }
+}
+
+fn layout_width(layout: &ModesLayout) -> usize {
+    let labels: usize = MODES
+        .iter()
+        .map(|spec| abbreviate(spec.label, layout).chars().count())
+        .sum();
+    labels + layout.separator.chars().count() * MODES.len().saturating_sub(1)
+}
+
+fn modes_layout(width: u16) -> &'static ModesLayout {
+    MODES_LAYOUTS
+        .iter()
+        .find(|layout| layout_width(layout) <= usize::from(width))
+        .unwrap_or(&MODES_LAYOUTS[MODES_LAYOUTS.len() - 1])
+}
+
 fn modes_line(app: &App) -> Line<'static> {
+    let layout = modes_layout(app.viewport.width);
     let mut spans = Vec::new();
     for (index, spec) in MODES.iter().enumerate() {
         if index > 0 {
-            spans.push(Span::styled(" · ", theme::dim()));
+            spans.push(Span::styled(layout.separator, theme::dim()));
         }
         let style = if index == app.mode_idx % MODES.len() {
             theme::title().add_modifier(Modifier::UNDERLINED)
         } else {
             theme::dim()
         };
-        spans.push(Span::styled(spec.label, style));
+        spans.push(Span::styled(abbreviate(spec.label, layout), style));
     }
     Line::from(spans)
 }
@@ -187,6 +230,70 @@ mod tests {
             width,
             height,
         }
+    }
+
+    #[test]
+    fn the_modes_row_degrades_instead_of_overflowing() {
+        struct Case {
+            name: &'static str,
+            width: u16,
+            want_separator: &'static str,
+            want_abbreviated: bool,
+        }
+        let cases = [
+            Case {
+                name: "roomy terminal keeps spaced separators",
+                width: 100,
+                want_separator: " · ",
+                want_abbreviated: false,
+            },
+            Case {
+                name: "medium terminal drops the padding first",
+                width: 45,
+                want_separator: "·",
+                want_abbreviated: false,
+            },
+            Case {
+                name: "narrow terminal abbreviates the labels",
+                width: 30,
+                want_separator: "·",
+                want_abbreviated: true,
+            },
+            Case {
+                name: "absurdly narrow still yields the tightest layout",
+                width: 1,
+                want_separator: "·",
+                want_abbreviated: true,
+            },
+        ];
+        for case in cases {
+            let layout = modes_layout(case.width);
+            assert_eq!(layout.separator, case.want_separator, "{}", case.name);
+            assert_eq!(
+                layout.label_chars.is_some(),
+                case.want_abbreviated,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_modes_layout_fits_the_width_it_claims() {
+        for width in [100_u16, 45, 30] {
+            let layout = modes_layout(width);
+            assert!(layout_width(layout) <= usize::from(width), "width {width}");
+        }
+    }
+
+    #[test]
+    fn abbreviated_labels_stay_unique() {
+        let layout = &MODES_LAYOUTS[MODES_LAYOUTS.len() - 1];
+        let labels: std::collections::BTreeSet<String> = MODES
+            .iter()
+            .map(|spec| abbreviate(spec.label, layout))
+            .collect();
+        assert_eq!(labels.len(), MODES.len());
     }
 
     #[test]

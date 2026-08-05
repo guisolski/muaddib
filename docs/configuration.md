@@ -120,7 +120,7 @@ CLI flags > config file > defaults:
 | answer language | `--lang` | `language` | `pt-BR` |
 | engine | `--engine` | `engine` | `claude` |
 | model | `--model` | `[engines.<name>] model` | engine default |
-| search mode | `--mode` | — | `general` |
+| search mode | `--mode` | — | `general` (`scientific`, `news`, `code`, `forums`, `deep`) |
 | fast mode | `--fast` | — | off (`Ctrl+F` toggles it in the TUI) |
 | web search | `--no-websearch` (disables) | `[websearch] enabled` | on |
 
