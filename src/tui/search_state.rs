@@ -49,6 +49,7 @@ pub struct SearchState {
     pub reflecting: bool,
     pub gaps: Option<usize>,
     pub activity: Vec<EngineActivity>,
+    pub fell_back: Option<String>,
     pub started_at: Option<Instant>,
     pub handle: Option<SearchHandle>,
     pub answer: Option<Answer>,
@@ -71,6 +72,7 @@ impl SearchState {
         self.reflecting = false;
         self.gaps = None;
         self.activity.clear();
+        self.fell_back = None;
         self.answer = None;
         self.links.clear();
         self.images.clear();
@@ -141,6 +143,11 @@ impl SearchState {
             }
             SearchEvent::EngineActivity { label, target } => {
                 self.record_activity(EngineActivity { label, target });
+                SearchOutcome::None
+            }
+            SearchEvent::FastFellBack { reason } => {
+                self.fell_back = Some(reason);
+                self.activity.clear();
                 SearchOutcome::None
             }
             SearchEvent::SynthesisStarted => {

@@ -99,7 +99,7 @@ impl Default for Config {
             images: true,
             animations: true,
             engine_timeout_secs: 180,
-            fast_timeout_secs: 45,
+            fast_timeout_secs: 90,
             websearch: WebSearchConfig::default(),
             engines: BTreeMap::new(),
         }
@@ -296,7 +296,7 @@ mod tests {
             Case {
                 name: "absent key uses the default",
                 input: "",
-                want: 45,
+                want: 90,
             },
             Case {
                 name: "explicit value is kept",

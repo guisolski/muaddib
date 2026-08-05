@@ -233,11 +233,23 @@ this stage — the JSON answer carries the image URLs themselves.
 3. **Guard the output.** `strip_image_blocks` removes any image the model emitted
    anyway; `renumber_sources` then runs against `self_declared_urls(&answer)` —
    the answer's own `sources`, filtered to real `http(s)` URLs.
-4. **Validate links** as usual (stage 7). Stage 8 never runs: `from_config`
-   forces `fetch_images = false` whenever `fast` is set.
+4. **Validate links** as usual (stage 7).
 
 The model comes from `[engines.<name>] fast_model`, else the engine table's
 `fast_model` (only `claude` has one: `haiku`), else the normal configured model.
+
+### When the fast lane does not deliver
+
+A fast attempt that fails — timeout, unparsable JSON, a schema mismatch — does
+**not** fail the search. `run_stages` emits `FastFellBack { reason }` and falls
+through into the standard stages, so the user waits longer but gets an answer.
+Fast mode used to be the one stage in muaddib that aborted rather than degraded,
+and it aborted after making the user wait out the whole budget.
+
+This is why `SearchRequest::from_config` keeps the real `websearch` and `images`
+config even when `fast` is set: the fast stage simply never reads them (a test
+asserts it never calls the fetcher), and leaving them populated means the
+fallback search is fully grounded instead of degraded twice over.
 The timeout is `fast_timeout_secs` (default 20s, clamped 5..=120).
 
 ### Measured latency, and why 5s is out of reach

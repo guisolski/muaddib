@@ -253,6 +253,9 @@ fn report_progress(event: &SearchEvent) {
         SearchEvent::EngineActivity { label, target } => {
             eprintln!("muaddib: {label} {target}");
         }
+        SearchEvent::FastFellBack { reason } => {
+            eprintln!("muaddib: {reason}; running the full search instead");
+        }
         SearchEvent::SynthesisStarted => eprintln!("muaddib: synthesizing answer..."),
         SearchEvent::ReflectionStarted => eprintln!("muaddib: reviewing the draft..."),
         SearchEvent::ReflectionGaps { gaps } => {

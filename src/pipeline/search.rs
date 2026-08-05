@@ -28,7 +28,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 pub const EXPANSION_TIMEOUT: Duration = Duration::from_secs(45);
-pub const FAST_TARGET_SECS: u64 = 5;
+pub const FAST_TARGET_SECS: u64 = 40;
 const EVENT_BUFFER: usize = 64;
 const ACTIVITY_BUFFER: usize = 8;
 
@@ -60,12 +60,8 @@ impl SearchRequest {
             fast,
             fast_timeout: Duration::from_secs(config.fast_timeout_secs),
             validate_links: config.validate_links,
-            fetch_images: config.images && !fast,
-            websearch: if fast {
-                WebSearchConfig::disabled()
-            } else {
-                config.websearch.clone()
-            },
+            fetch_images: config.images,
+            websearch: config.websearch.clone(),
             context: ResearchContext::default(),
         }
     }
@@ -126,7 +122,10 @@ async fn run_stages(
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Result<(), String> {
     if request.fast {
-        return run_fast_stages(engine, request, tx).await;
+        match run_fast_stages(engine, request, tx).await {
+            Ok(()) => return Ok(()),
+            Err(reason) => send(tx, SearchEvent::FastFellBack { reason }).await,
+        }
     }
     let plan = expansion_stage(engine, request, tx).await;
     send(tx, SearchEvent::PlanReady(plan.clone())).await;
@@ -1035,17 +1034,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fast_mode_failure_reports_a_search_failure() {
-        let (_, events) = drain(FakeEngine::failing_on(&[FAST_MARKER]), fast_request()).await;
+    async fn a_fast_answer_that_never_arrives_falls_back_to_the_full_search() {
+        let (calls, events) = drain(FakeEngine::failing_on(&[FAST_MARKER]), fast_request()).await;
+        let reason = events
+            .iter()
+            .find_map(|event| match event {
+                SearchEvent::FastFellBack { reason } => Some(reason.as_str()),
+                _ => None,
+            })
+            .expect("the fallback was announced");
+        assert!(reason.contains("fast search failed"));
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert_eq!(answer_in(&events).title, "Compiled");
+        assert_eq!(calls, 6);
+    }
+
+    #[tokio::test]
+    async fn a_search_that_fails_after_the_fallback_still_reports_the_failure() {
+        let (_, events) = drain(
+            FakeEngine::failing_on(&[FAST_MARKER, SUB_SEARCH_MARKER]),
+            fast_request(),
+        )
+        .await;
         let Some(SearchEvent::Failed(message)) = events.last() else {
             panic!("expected Failed last");
         };
-        assert!(message.contains("fast search failed"));
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event, SearchEvent::SubQueryFinished { ok: false, .. }))
-        );
+        assert!(message.contains("every sub-query failed"));
+    }
+
+    #[tokio::test]
+    async fn the_fast_stage_never_touches_the_web_fetcher() {
+        let engine = Arc::new(FakeEngine::reliable());
+        let fetcher = Arc::new(FakeWebFetcher::returning(vec![web_hit(
+            "https://hit.example/page",
+            "snippet",
+        )]));
+        let events = drain_with(
+            engine,
+            fetcher.clone(),
+            SearchRequest {
+                fast: true,
+                websearch: WebSearchConfig::default(),
+                ..request()
+            },
+        )
+        .await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert_eq!(fetcher.calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn the_fallback_search_is_grounded_because_the_request_kept_its_config() {
+        let engine = Arc::new(FakeEngine::failing_on(&[FAST_MARKER]));
+        let fetcher = Arc::new(FakeWebFetcher::returning(vec![web_hit(
+            "https://hit.example/page",
+            "snippet",
+        )]));
+        let events = drain_with(
+            engine,
+            fetcher.clone(),
+            SearchRequest {
+                fast: true,
+                websearch: WebSearchConfig::default(),
+                ..request()
+            },
+        )
+        .await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert!(fetcher.calls.load(Ordering::SeqCst) > 0);
     }
 
     #[tokio::test]
@@ -1407,12 +1463,14 @@ mod tests {
     }
 
     #[test]
-    fn fast_request_from_config_disables_websearch() {
+    fn a_fast_request_keeps_the_config_its_fallback_would_need() {
         let config = Config::default();
         let fast = SearchRequest::from_config("q".to_string(), Mode::General, true, &config);
         let standard = SearchRequest::from_config("q".to_string(), Mode::General, false, &config);
-        assert!(!fast.websearch.enabled);
-        assert!(standard.websearch.enabled);
+        assert!(fast.websearch.enabled);
+        assert!(fast.fetch_images);
+        assert_eq!(fast.websearch, standard.websearch);
+        assert!(fast.fast);
     }
 
     #[test]
@@ -1436,7 +1494,7 @@ mod tests {
     }
 
     #[test]
-    fn fast_request_carries_the_fast_timeout_and_disables_images() {
+    fn fast_request_carries_the_fast_timeout() {
         let config = Config {
             fast_timeout_secs: 12,
             images: true,
@@ -1445,6 +1503,5 @@ mod tests {
         let request = SearchRequest::from_config("q".to_string(), Mode::General, true, &config);
         assert!(request.fast);
         assert_eq!(request.fast_timeout, Duration::from_secs(12));
-        assert!(!request.fetch_images);
     }
 }

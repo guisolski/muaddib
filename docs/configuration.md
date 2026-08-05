@@ -65,7 +65,8 @@ validate_links = true       # HTTP HEAD validation of every source
 images = true               # fetch and render answer images in the terminal
 animations = true           # staggered block reveal, chart growth, jump pulses
 engine_timeout_secs = 180   # per engine call; synthesis scales this with plan size
-fast_timeout_secs = 45      # hard ceiling for the single fast-mode call, clamped to 5..=120
+fast_timeout_secs = 90      # ceiling for the single fast-mode call, clamped to 5..=120
+                            # past it the search degrades to the full pipeline, it does not fail
 
 [websearch]                 # built-in web-search grounding (ADR-0007)
 enabled = true              # query conventional engines before the AI fan-out; off in fast mode
@@ -163,10 +164,20 @@ agent system prompt, a thinking block, the web search round-trip, and a second
 thinking block before the structured answer. That is roughly 15–30s for `haiku`,
 whatever the prompt asks for.
 
-`FAST_TARGET_SECS` (5s) therefore only controls when the elapsed counter on the
-searching screen turns yellow. Nothing is aborted at 5s; `fast_timeout_secs`
-(45s) is the only hard ceiling, set high enough that a normal fast search never
-trips it.
+Measured on a real query (`treino fullbody para academia para quem esta voltando`,
+`haiku`, three runs across two builds): **32–36 seconds**. The old defaults were
+set against the 5s aspiration rather than that number — a 45s ceiling over a 36s
+median is 20% of headroom, so one extra page fetch or a slower network turned a
+working search into a hard failure.
+
+`FAST_TARGET_SECS` is now 40s and only controls when the elapsed counter on the
+searching screen turns yellow — it marks a search running *late*, not one running
+at all. `fast_timeout_secs` is 90s, roughly 2.5× the measured median.
+
+Crossing it is no longer fatal. The fast attempt is an optimization, and like
+every other stage in muaddib it degrades instead of aborting: the pipeline emits
+`FastFellBack` and runs the full search, so the user gets an answer rather than
+an error after a long wait.
 
 ## Search history
 

@@ -39,12 +39,19 @@ fn panel_lines(app: &App, include_mascot: bool, width: usize) -> Vec<Line<'stati
         Span::styled(spinner::frame(app.tick).to_string(), theme::citation()),
         Span::styled(format!(" searching: {}", query_text(app)), theme::title()),
     ];
-    if app.fast {
+    if app.fast && app.search.fell_back.is_none() {
         header.push(Span::styled(" ⚡ fast", theme::warn()));
     }
     header.push(elapsed_span(app));
     lines.push(Line::from(header));
     lines.push(Line::default());
+    if app.search.fell_back.is_some() {
+        lines.push(Line::styled(
+            "fast answer did not arrive — running the full search",
+            theme::warn(),
+        ));
+        lines.push(Line::default());
+    }
     lines.extend(sub_query_lines(app));
     lines.extend(activity_lines(app, width));
     if let Some(count) = app.search.web_hits {
