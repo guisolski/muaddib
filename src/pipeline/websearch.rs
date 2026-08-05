@@ -328,7 +328,7 @@ mod tests {
             Box::pin(async move {
                 self.calls.lock().unwrap().push(spec.name);
                 if self.slow_engines.contains(&spec.name) {
-                    tokio::time::sleep(Duration::from_secs(600)).await;
+                    tokio::time::sleep(Duration::from_mins(10)).await;
                 }
                 self.canned
                     .get(spec.name)

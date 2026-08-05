@@ -117,7 +117,7 @@ mod tests {
             Box::pin(async move {
                 self.calls.lock().unwrap().push(url.to_string());
                 if self.slow_urls.contains(&url) {
-                    tokio::time::sleep(Duration::from_secs(600)).await;
+                    tokio::time::sleep(Duration::from_mins(10)).await;
                 }
                 self.pages.get(url).map(|body| (*body).to_string())
             })

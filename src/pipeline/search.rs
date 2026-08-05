@@ -731,7 +731,7 @@ mod tests {
                     return Err(EngineError::Reported(format!("forced failure: {marker}")));
                 }
                 if self.slow_markers.contains(&marker) {
-                    tokio::time::sleep(Duration::from_secs(3_600)).await;
+                    tokio::time::sleep(Duration::from_hours(1)).await;
                 }
                 Ok(EngineOutput::from_text(self.canned_response(marker)))
             })

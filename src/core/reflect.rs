@@ -67,7 +67,7 @@ mod tests {
             sub_queries: usize,
             want_secs: u64,
         }
-        let base = Duration::from_secs(180);
+        let base = Duration::from_mins(3);
         let cases = [
             Case {
                 name: "a single sub-query still buys all three steps",
