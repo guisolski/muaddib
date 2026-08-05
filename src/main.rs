@@ -183,13 +183,20 @@ fn report_missing_engines(statuses: &[EngineStatus]) {
 
 async fn stream_search_to_stdio(engine: Arc<CliEngine>, request: SearchRequest) -> ExitCode {
     let mut handle = spawn_search(engine, request);
-    let mut answer = None;
+    let mut answer: Option<Box<muaddib::core::answer::Answer>> = None;
     let mut failure = None;
     while let Some(event) = handle.events.recv().await {
         match event {
             SearchEvent::AnswerReady(ready) => answer = Some(ready),
             SearchEvent::Failed(message) => failure = Some(message),
-            other => report_progress(&other),
+            other => {
+                report_progress(&other);
+                if let (SearchEvent::LinkChecked { source_id, status }, Some(answer)) =
+                    (&other, answer.as_mut())
+                {
+                    record_link_status(answer, *source_id, *status);
+                }
+            }
         }
     }
     if let Some(answer) = answer {
@@ -203,6 +210,20 @@ async fn stream_search_to_stdio(engine: Arc<CliEngine>, request: SearchRequest) 
             failure.unwrap_or_else(|| "no answer produced".to_string())
         );
         ExitCode::FAILURE
+    }
+}
+
+fn record_link_status(
+    answer: &mut muaddib::core::answer::Answer,
+    source_id: u32,
+    status: LinkStatus,
+) {
+    if let Some(source) = answer
+        .sources
+        .iter_mut()
+        .find(|source| source.id == source_id)
+    {
+        source.status = Some(status);
     }
 }
 

@@ -143,6 +143,7 @@ mod tests {
                     title: format!("source {idx}"),
                     url: (*url).to_string(),
                     lang: "en".to_string(),
+                    status: None,
                 })
                 .collect(),
             ..Answer::default()

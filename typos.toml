@@ -2,6 +2,8 @@
 avances = "avances"
 tema = "tema"
 ratatui = "ratatui"
+fo = "fo"
+fooba = "fooba"
 
 [files]
 extend-exclude = ["tests/fixtures/*.json"]

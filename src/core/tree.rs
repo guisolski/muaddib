@@ -1,4 +1,5 @@
 use crate::core::answer::Answer;
+use crate::core::citations::LinkStatus;
 use crate::core::mode::Mode;
 use crate::core::plan::SubQuery;
 use serde::{Deserialize, Serialize};
@@ -87,6 +88,18 @@ impl ResearchTree {
         });
         self.current = Some(id);
         id
+    }
+
+    pub fn set_source_status(&mut self, id: NodeId, source_id: u32, status: LinkStatus) {
+        if let Some(node) = self.nodes.iter_mut().find(|node| node.id == id)
+            && let Some(source) = node
+                .answer
+                .sources
+                .iter_mut()
+                .find(|source| source.id == source_id)
+        {
+            source.status = Some(status);
+        }
     }
 
     pub fn node(&self, id: NodeId) -> Option<&ResearchNode> {

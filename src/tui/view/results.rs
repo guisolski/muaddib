@@ -62,6 +62,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 }
 
 fn footer_line(app: &App) -> Line<'static> {
+    if let Some(notice) = &app.notice {
+        return Line::styled(notice.clone(), theme::warn());
+    }
     let mut spans = Vec::new();
     if app.config.animations
         && let Some(started) = app.search.reveal_started

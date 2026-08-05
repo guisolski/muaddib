@@ -12,6 +12,7 @@ pub mod widgets;
 use crate::config_store;
 use crate::core::config::Config;
 use crate::core::context::context_for;
+use crate::core::export::osc52_payload;
 use crate::core::history::{push_recall, repeats_latest};
 use crate::core::mode::Mode;
 use crate::core::tree::ResearchTree;
@@ -137,9 +138,67 @@ fn dispatch_command(app: &mut App, command: Command) -> bool {
         Command::OpenUrl(url) => open_url(&url),
         Command::SaveConfig => save_config(app),
         Command::SaveSession => save_session(app),
+        Command::CopyAnswer(markdown) => copy_answer(app, &markdown),
+        Command::ExportAnswer { filename, contents } => export_answer(app, &filename, &contents),
         Command::ClearHistory => clear_history(app),
     }
     false
+}
+
+const CLIPBOARD_COMMANDS: &[(&str, &[&str])] = &[
+    ("pbcopy", &[]),
+    ("wl-copy", &[]),
+    ("xclip", &["-selection", "clipboard"]),
+    ("xsel", &["--clipboard", "--input"]),
+];
+
+fn copy_answer(app: &mut App, markdown: &str) {
+    if copy_with_command(markdown) || copy_with_osc52(markdown) {
+        app.notice = Some("answer copied as markdown".to_string());
+    } else {
+        app.notice = Some("could not reach a clipboard".to_string());
+    }
+}
+
+fn copy_with_command(markdown: &str) -> bool {
+    CLIPBOARD_COMMANDS
+        .iter()
+        .any(|(bin, args)| pipe_to_command(bin, args, markdown))
+}
+
+fn pipe_to_command(bin: &str, args: &[&str], markdown: &str) -> bool {
+    let Ok(mut child) = std::process::Command::new(bin)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    if let Some(stdin) = child.stdin.as_mut()
+        && std::io::Write::write_all(stdin, markdown.as_bytes()).is_err()
+    {
+        return false;
+    }
+    drop(child.stdin.take());
+    child.wait().is_ok_and(|status| status.success())
+}
+
+fn copy_with_osc52(markdown: &str) -> bool {
+    let Some(payload) = osc52_payload(markdown) else {
+        return false;
+    };
+    let mut stdout = std::io::stdout();
+    std::io::Write::write_all(&mut stdout, payload.as_bytes()).is_ok()
+        && std::io::Write::flush(&mut stdout).is_ok()
+}
+
+fn export_answer(app: &mut App, filename: &str, contents: &str) {
+    match std::fs::write(filename, contents) {
+        Ok(()) => app.notice = Some(format!("answer exported to {filename}")),
+        Err(error) => app.notice = Some(format!("failed to export: {error}")),
+    }
 }
 
 fn save_session(app: &mut App) {

@@ -26,6 +26,7 @@ flowchart TB
         PROMPT[core/prompts — prompt builders]
         EXTRACT[core/extract — JSON extraction]
         ANSWER[core/answer — answer schema]
+        EXPORT[core/export — markdown, OSC 52]
         CIT[core/citations — merge and renumber]
         WEBT[core/websearch — WEB_ENGINES table and parsers]
         RANK[core/rank — BM25 hit reranking]
@@ -75,6 +76,7 @@ logic needs to be touched:
 | `EXTRACTORS` | `core/extract.rs` | JSON extraction strategies, tried in order |
 | `KEYMAP` | `tui/keymap.rs` | keybindings, and the Ctrl+G help screen |
 | `CONFIG_FIELDS` | `tui/app.rs` | config modal fields |
+| `CLIPBOARD_COMMANDS` | `tui/mod.rs` | clipboard binaries tried before OSC 52 |
 | `FRAMES` | `tui/widgets/spinner.rs` | spinner animation |
 | `SLEEPING` / `WORM` | `tui/widgets/mascot.rs` | mascot frames: sleeping breath, hop, Shai-Hulud pass |
 | `GENERIC_TEXT_KEYS` | `engines/parse.rs` | envelope key probing |

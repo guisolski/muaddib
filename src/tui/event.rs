@@ -16,6 +16,8 @@ pub enum Command {
     OpenUrl(String),
     SaveConfig,
     SaveSession,
+    CopyAnswer(String),
+    ExportAnswer { filename: String, contents: String },
     ClearHistory,
     Quit,
 }

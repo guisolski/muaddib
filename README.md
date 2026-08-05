@@ -104,7 +104,10 @@ instinct) — the mouse kept the nose.
   bar charts, and flow/timeline diagrams — all cited
 - Inline images from the searched pages, rendered in the terminal (kitty,
   iTerm2, sixel — unicode half-blocks everywhere else)
-- Live link validation (✓ / ✗ 404) directly in the sources list
+- Live link validation (✓ / ✗ 404) directly in the sources list — and the status
+  travels with the source, so exports, `--print` JSON, and reopened sessions keep it
+- Export the answer as Markdown: `y` copies it, `e` writes it to a file. Diagrams
+  become mermaid blocks that GitHub and Obsidian render natively
 - Config modal (`Ctrl+O`): answer language, engine, model, link validation, parallelism
 - Headless mode (`--print`) that emits the answer as JSON for scripting
 - Answer language follows your config (default: `pt-BR`) — search in any language,
@@ -191,6 +194,8 @@ muaddib --clear-history                        # erase the saved search history
 | Results | `Tab` / `Shift+Tab` | cycle focus: body → sources → follow-ups |
 | Results | `Enter` | open the selected source, or run the selected follow-up as a new search |
 | Results | `1`-`9` | jump to source N |
+| Results | `y` | copy the answer as Markdown (clipboard, or OSC 52 over SSH) |
+| Results | `e` | export the answer to `muaddib-<slug>.md` |
 | Results | `n` | new search |
 | Results | `/` | refine current search |
 | Results | `q` | quit |

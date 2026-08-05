@@ -155,7 +155,8 @@ pub fn image_urls(answer: &Answer) -> Vec<String> {
         })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum LinkStatus {
     Valid,
     Invalid(u16),
@@ -314,6 +315,7 @@ mod tests {
             title: format!("source {id}"),
             url: url.to_string(),
             lang: "en".to_string(),
+            status: None,
         }
     }
 

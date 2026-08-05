@@ -29,6 +29,7 @@ pub enum ImageFetch {
 pub enum SearchOutcome {
     None,
     AnswerReady,
+    LinkChecked { source_id: u32, status: LinkStatus },
     Completed,
     Failed(String),
 }
@@ -133,7 +134,8 @@ impl SearchState {
             }
             SearchEvent::LinkChecked { source_id, status } => {
                 self.links.insert(source_id, status);
-                SearchOutcome::None
+                self.record_status(source_id, status);
+                SearchOutcome::LinkChecked { source_id, status }
             }
             SearchEvent::ImageFetched { url, bytes } => {
                 self.images
@@ -149,6 +151,17 @@ impl SearchState {
                 self.failed_at = Some(tick);
                 SearchOutcome::Failed(message)
             }
+        }
+    }
+
+    fn record_status(&mut self, source_id: u32, status: LinkStatus) {
+        if let Some(answer) = self.answer.as_mut()
+            && let Some(source) = answer
+                .sources
+                .iter_mut()
+                .find(|source| source.id == source_id)
+        {
+            source.status = Some(status);
         }
     }
 

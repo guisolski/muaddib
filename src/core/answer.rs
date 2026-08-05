@@ -1,3 +1,4 @@
+use crate::core::citations::LinkStatus;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -161,6 +162,8 @@ pub struct Source {
     pub url: String,
     #[serde(default)]
     pub lang: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<LinkStatus>,
 }
 
 pub fn parse_answer(value: serde_json::Value) -> Result<Answer, serde_json::Error> {
@@ -424,6 +427,7 @@ mod tests {
                 title: "Example".to_string(),
                 url: "https://example.com".to_string(),
                 lang: "en".to_string(),
+                status: None,
             }],
             followups: vec!["related query".to_string()],
         }

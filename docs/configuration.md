@@ -190,6 +190,8 @@ branch from the node they were asked from (ADR-0010).
 |---|---|
 | `f` (Results / tree) | ask a follow-up that branches from the current / selected node |
 | `t` (Results) | open the research tree; `j`/`k` move, `Enter` views a node's answer |
+| `y` (Results) | copy the answer as Markdown — a local clipboard command if one exists, else OSC 52 so it reaches the client's clipboard over SSH |
+| `e` (Results) | export the answer to `muaddib-<slug>.md` in the working directory |
 | `s` (Results / tree) | save the session to disk; later saves overwrite the same file |
 | `--session <file>` | reopen a saved session in the TUI |
 | `$MUADDIB_SESSIONS` | overrides the sessions directory entirely |

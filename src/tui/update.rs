@@ -1,3 +1,4 @@
+use crate::core::export::{ExportContext, suggested_filename, to_markdown};
 use crate::core::mode::MODES;
 use crate::core::tree::{NodeId, NodeSeed};
 use crate::pipeline::SearchEvent;
@@ -53,6 +54,7 @@ fn handle_key(app: &mut App, key: &KeyEvent) -> Option<Command> {
     if action != Action::ClearHistory {
         disarm_clear_history(app);
     }
+    app.notice = None;
     perform(app, action)
 }
 
@@ -163,6 +165,8 @@ fn perform(app: &mut App, action: Action) -> Option<Command> {
         }
         Action::SubmitFollowUp => submit_follow_up(app),
         Action::SaveSession => save_session(app),
+        Action::CopyAnswer => copy_answer(app),
+        Action::ExportAnswer => export_answer(app),
         Action::FieldNext | Action::FieldPrev | Action::ValueNext | Action::ValuePrev => {
             if matches!(app.overlay, Some(Overlay::Help)) {
                 scroll_help(app, action);
@@ -352,6 +356,38 @@ fn save_session(app: &mut App) -> Option<Command> {
         return None;
     }
     Some(Command::SaveSession)
+}
+
+fn export_context(app: &App) -> ExportContext {
+    let (query, mode) = app.search.plan.as_ref().map_or_else(
+        || (app.input.value().trim().to_string(), app.current_mode()),
+        |plan| (plan.original.clone(), plan.mode),
+    );
+    ExportContext { query, mode }
+}
+
+fn rendered_answer(app: &App) -> Option<(String, String)> {
+    let answer = app.search.answer.as_ref()?;
+    Some((
+        suggested_filename(answer),
+        to_markdown(answer, &export_context(app)),
+    ))
+}
+
+fn copy_answer(app: &mut App) -> Option<Command> {
+    let Some((_, markdown)) = rendered_answer(app) else {
+        app.notice = Some("no answer to copy".to_string());
+        return None;
+    };
+    Some(Command::CopyAnswer(markdown))
+}
+
+fn export_answer(app: &mut App) -> Option<Command> {
+    let Some((filename, contents)) = rendered_answer(app) else {
+        app.notice = Some("no answer to export".to_string());
+        return None;
+    };
+    Some(Command::ExportAnswer { filename, contents })
 }
 
 fn move_down(app: &mut App) {
@@ -659,6 +695,11 @@ fn apply_search_event(app: &mut App, event: SearchEvent) -> Option<Command> {
             app.scroll = 0;
             app.focus = Focus::Body;
         }
+        SearchOutcome::LinkChecked { source_id, status } => {
+            if let Some(current) = app.tree.current {
+                app.tree.set_source_status(current, source_id, status);
+            }
+        }
         SearchOutcome::Failed(message) => {
             app.notice = Some(message);
             app.pending_parent = None;
@@ -703,6 +744,7 @@ fn capture_node(app: &mut App) {
 mod tests {
     use super::*;
     use crate::core::answer::{Answer, Block, Emphasis, Source};
+    use crate::core::citations::LinkStatus;
     use crate::core::config::Config;
     use crate::core::mode::Mode;
     use crate::core::plan::{SearchPlan, SubQuery};
@@ -770,12 +812,14 @@ mod tests {
                     title: "one".to_string(),
                     url: "https://one.example".to_string(),
                     lang: "en".to_string(),
+                    status: None,
                 },
                 Source {
                     id: 2,
                     title: "two".to_string(),
                     url: "https://two.example".to_string(),
                     lang: "en".to_string(),
+                    status: None,
                 },
             ],
             ..Answer::default()
@@ -799,6 +843,94 @@ mod tests {
         app.screen = Screen::Results;
         app.viewport = Viewport { width: 40, height };
         app
+    }
+
+    #[test]
+    fn copy_and_export_render_the_answer_as_markdown() {
+        struct Case {
+            name: &'static str,
+            key: char,
+            want_filename: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                name: "y copies without a filename",
+                key: 'y',
+                want_filename: None,
+            },
+            Case {
+                name: "e exports to a slugged filename",
+                key: 'e',
+                want_filename: Some("muaddib-t.md"),
+            },
+        ];
+        for case in cases {
+            let mut app = results_app(sample_answer(), 24);
+            let command = update(&mut app, key(KeyCode::Char(case.key)));
+            let markdown = match (command, case.want_filename) {
+                (Some(Command::CopyAnswer(markdown)), None) => markdown,
+                (Some(Command::ExportAnswer { filename, contents }), Some(want)) => {
+                    assert_eq!(filename, want, "{}", case.name);
+                    contents
+                }
+                (other, _) => panic!("{}: unexpected {other:?}", case.name),
+            };
+            assert!(markdown.starts_with("# t\n"), "{}", case.name);
+            assert!(markdown.contains("https://one.example"), "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn copy_and_export_report_when_there_is_no_answer() {
+        for character in ['y', 'e'] {
+            let mut app = app();
+            app.screen = Screen::Results;
+            assert_eq!(update(&mut app, key(KeyCode::Char(character))), None);
+            assert!(
+                app.notice
+                    .as_deref()
+                    .is_some_and(|notice| notice.starts_with("no answer to")),
+                "{character}: {:?}",
+                app.notice
+            );
+        }
+    }
+
+    #[test]
+    fn a_checked_link_lands_on_the_answer_and_the_captured_node() {
+        let mut app = results_app(sample_answer(), 24);
+        app.tree.add_node(
+            None,
+            NodeSeed {
+                query: "q".to_string(),
+                mode: app.current_mode(),
+                fast: false,
+                started_at: 0,
+                completed_at: 0,
+                answer: sample_answer(),
+                sub_queries: Vec::new(),
+                web_urls: Vec::new(),
+            },
+        );
+        update(
+            &mut app,
+            AppEvent::Search(SearchEvent::LinkChecked {
+                source_id: 2,
+                status: LinkStatus::Invalid(404),
+            }),
+        );
+        let live = &app.search.answer.as_ref().unwrap().sources[1];
+        assert_eq!(live.status, Some(LinkStatus::Invalid(404)));
+        let stored = &app.tree.current_node().unwrap().answer.sources[1];
+        assert_eq!(stored.status, Some(LinkStatus::Invalid(404)));
+    }
+
+    #[test]
+    fn any_keypress_dismisses_the_last_notice() {
+        let mut app = results_app(sample_answer(), 24);
+        app.notice = Some("answer copied as markdown".to_string());
+        update(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.notice, None);
     }
 
     #[test]
