@@ -39,7 +39,9 @@ tag="${MUADDIB_VERSION:-$(latest_tag)}"
 [ -n "$tag" ] || die "could not resolve the latest release tag"
 
 archive="muaddib-$target.tar.gz"
-url="https://github.com/$REPO/releases/download/$tag/$archive"
+checksum="muaddib-$target.sha256"
+base="https://github.com/$REPO/releases/download/$tag"
+url="$base/$archive"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -47,12 +49,15 @@ trap 'rm -rf "$tmp"' EXIT
 echo "muaddib: downloading $tag for $target"
 curl -fsSL "$url" -o "$tmp/$archive" || die "download failed: $url"
 
-if command -v shasum >/dev/null 2>&1 &&
-	curl -fsSL "$url.sha256" -o "$tmp/$archive.sha256" 2>/dev/null; then
-	expected="$(cut -d' ' -f1 <"$tmp/$archive.sha256")"
+if command -v shasum >/dev/null 2>&1; then
+	curl -fsSL "$base/$checksum" -o "$tmp/$checksum" ||
+		die "could not download the checksum: $base/$checksum"
+	expected="$(cut -d' ' -f1 <"$tmp/$checksum")"
 	actual="$(shasum -a 256 "$tmp/$archive" | cut -d' ' -f1)"
 	[ "$expected" = "$actual" ] || die "checksum mismatch for $archive"
 	echo "muaddib: checksum verified"
+else
+	echo "muaddib: shasum not found, skipping checksum verification" >&2
 fi
 
 tar -xzf "$tmp/$archive" -C "$tmp"

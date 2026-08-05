@@ -139,10 +139,12 @@ to the first available engine automatically.
 ## Install
 
 **Homebrew** (macOS, Linux) — the formula lives in this repository, so the tap points
-straight at it:
+straight at it. Homebrew refuses to load formulae from third-party taps until you
+trust them explicitly:
 
 ```sh
 brew tap guisolski/muaddib https://github.com/guisolski/muaddib
+brew trust --formula guisolski/muaddib/muaddib
 brew install muaddib
 ```
 
