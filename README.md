@@ -6,7 +6,7 @@
 [![crates.io](https://img.shields.io/crates/v/muaddib.svg)](https://crates.io/crates/muaddib)
 [![downloads](https://img.shields.io/crates/d/muaddib.svg)](https://crates.io/crates/muaddib)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.93%2B-orange.svg)](Cargo.toml)
+[![msrv](https://img.shields.io/crates/msrv/muaddib.svg?color=orange)](Cargo.toml)
 
 ```
        \ /
