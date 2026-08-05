@@ -29,9 +29,6 @@ sleeps on the dunes while you type, hops across them while your search fans
 out, and celebrates when the answer lands. Sit idle long enough and Shai-Hulud
 passes through.
 
-The project was previously named **faro** (Portuguese for a scent-tracking
-instinct) — the mouse kept the nose.
-
 ```
                                   \ /
                                  (o.o)~-,
@@ -281,13 +278,6 @@ Search history lives separately, under the XDG *state* dir:
 `~/.local/state/muaddib/history.jsonl` (or `$XDG_STATE_HOME/muaddib/history.jsonl`, or
 `$MUADDIB_HISTORY`). It is JSON Lines — one appended object per search, capped at 500
 entries, with unparsable lines skipped rather than fatal.
-
-Upgrading from the old **faro** name? Your config and history don't move themselves:
-
-```sh
-mv ~/.config/faro ~/.config/muaddib
-mv ~/.local/state/faro ~/.local/state/muaddib
-```
 
 ## Development
 
