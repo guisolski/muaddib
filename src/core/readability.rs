@@ -61,11 +61,7 @@ pub fn pages_prompt_block(pages: &[PageText]) -> String {
          as the source; verify anything ambiguous with your own search.\n"
     )
 }
-
-#[cfg(feature = "websearch")]
 pub use extract::extract_readable_text;
-
-#[cfg(feature = "websearch")]
 mod extract {
     use scraper::{ElementRef, Html, Selector};
 
@@ -232,7 +228,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "websearch"))]
+#[cfg(test)]
 mod extract_tests {
     use super::extract_readable_text;
 

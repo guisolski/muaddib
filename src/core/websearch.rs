@@ -456,11 +456,7 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
         Some(bytes)
     })
 }
-
-#[cfg(feature = "websearch")]
 pub use parse::parse_hits;
-
-#[cfg(feature = "websearch")]
 mod parse {
     use super::{
         HitParser, SNIPPET_MAX_CHARS, WebEngineSpec, WebHit, decode_bing_redirect,
@@ -1413,7 +1409,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "websearch"))]
+#[cfg(test)]
 mod parse_tests {
     use super::*;
 

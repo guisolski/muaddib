@@ -16,17 +16,17 @@ release: ## Compile the optimized release binary
 run: ## Launch the TUI (debug build)
 	cargo run
 
-test: ## Run the full test suite with all features
-	cargo test --all-features
+test: ## Run the full test suite
+	cargo test
 
 mutants: ## Mutation-test the lines changed against origin/main
 	scripts/mutants_in_diff.sh
 
 eval: ## Score the golden queries against a real AI CLI and rewrite docs/eval-baseline.md
-	cargo test --test eval_live --all-features -- --ignored --nocapture
+	cargo test --test eval_live -- --ignored --nocapture
 
 check: ## Type-check every target without building
-	cargo check --all-targets --all-features
+	cargo check --all-targets
 
 fmt: ## Format the whole workspace
 	cargo fmt --all
@@ -35,7 +35,7 @@ fmt-check: ## Fail if any file is not formatted
 	cargo fmt --all -- --check
 
 lint: ## Run clippy on every target, warnings are errors
-	cargo clippy --all-targets --all-features -- -D warnings
+	cargo clippy --all-targets -- -D warnings
 
 clean: ## Remove build artifacts
 	cargo clean

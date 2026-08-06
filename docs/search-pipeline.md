@@ -199,8 +199,7 @@ stage. A reflection round can only add findings, never subtract them.
 
 ### 7. Validate links
 
-With the `link-validation` feature (default) and `validate_links = true`, every
-source URL gets an HTTP HEAD request — 8 concurrent, 8s timeout, up to 5
+With `validate_links = true`, every source URL gets an HTTP HEAD request — 8 concurrent, 8s timeout, up to 5
 redirects; 403/405/501 retry as `GET` with `Range: bytes=0-0` (some servers
 reject HEAD). Results stream to the UI as `LinkChecked` events: ✓, ✗ 404, or
 ✗ unreachable.

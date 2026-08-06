@@ -14,7 +14,7 @@ make test
 |---|---|
 | `make` / `make help` | list every target (default) |
 | `make build` / `make release` | debug / release build |
-| `make test` | `cargo test --all-features` |
+| `make test` | `cargo test` |
 | `make mutants` | mutation-test the lines changed against `origin/main` |
 | `make lint` | clippy, all targets, `-D warnings` |
 | `make fmt` / `make fmt-check` | rustfmt |
@@ -48,7 +48,7 @@ make test
   whitelisted in `typos.toml`), the no-comments guard, `cargo fmt --check`,
   `cargo clippy -D warnings`
 - **commit-msg**: conventional commit format
-- **pre-push**: `cargo test --all-features`, then `cargo mutants` over the
+- **pre-push**: `cargo test`, then `cargo mutants` over the
   changed lines
 
 ## The fake engine harness

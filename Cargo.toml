@@ -21,22 +21,17 @@ futures = "0.3.33"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
 ratatui = "0.30.2"
 ratatui-image = { version = "11.0.6", default-features = false, features = ["crossterm"] }
-reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "http2"], optional = true }
-scraper = { version = "0.27.0", optional = true }
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls", "http2"] }
+scraper = "0.27.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 thiserror = "2.0.19"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "process", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["macros", "process", "rt-multi-thread", "sync", "time"] }
 toml = "1.1.4"
 tui-input = "0.15.3"
 
 [dev-dependencies]
-tokio = { version = "1.53.1", features = ["test-util"] }
-
-[features]
-default = ["link-validation", "websearch"]
-link-validation = ["dep:reqwest"]
-websearch = ["dep:reqwest", "dep:scraper"]
+tokio = { version = "1.53.1", features = ["test-util", "net", "io-util"] }
 
 [profile.release]
 lto = "thin"

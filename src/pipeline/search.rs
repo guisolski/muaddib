@@ -513,7 +513,6 @@ async fn synthesis_stage(
     Ok(annotate_sources(renumber_sources(answer, &allowed), hits))
 }
 
-#[cfg(feature = "websearch")]
 async fn page_grounding_stage(
     fetcher: &dyn WebFetcher,
     plan: &SearchPlan,
@@ -524,18 +523,6 @@ async fn page_grounding_stage(
     crate::pipeline::pages::page_fetch_stage(fetcher, plan, hits, config, tx).await
 }
 
-#[cfg(not(feature = "websearch"))]
-async fn page_grounding_stage(
-    _fetcher: &dyn WebFetcher,
-    _plan: &SearchPlan,
-    hits: &[Vec<WebHit>],
-    _config: &WebSearchConfig,
-    _tx: &mpsc::Sender<SearchEvent>,
-) -> Vec<Vec<PageText>> {
-    vec![Vec::new(); hits.len()]
-}
-
-#[cfg(feature = "link-validation")]
 async fn link_validation_stage(
     answer: &Answer,
     request: &SearchRequest,
@@ -546,15 +533,6 @@ async fn link_validation_stage(
     }
 }
 
-#[cfg(not(feature = "link-validation"))]
-async fn link_validation_stage(
-    _answer: &Answer,
-    _request: &SearchRequest,
-    _tx: &mpsc::Sender<SearchEvent>,
-) {
-}
-
-#[cfg(feature = "link-validation")]
 async fn image_fetch_stage(
     answer: &Answer,
     request: &SearchRequest,
@@ -563,14 +541,6 @@ async fn image_fetch_stage(
     if request.fetch_images {
         crate::pipeline::images::fetch_images(answer, tx).await;
     }
-}
-
-#[cfg(not(feature = "link-validation"))]
-async fn image_fetch_stage(
-    _answer: &Answer,
-    _request: &SearchRequest,
-    _tx: &mpsc::Sender<SearchEvent>,
-) {
 }
 
 #[cfg(test)]

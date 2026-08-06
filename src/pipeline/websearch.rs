@@ -16,11 +16,8 @@ use std::time::Duration;
 use tokio::sync::mpsc::Sender;
 
 pub const WEB_QUERY_TIMEOUT: Duration = Duration::from_secs(5);
-#[cfg(feature = "websearch")]
 const WEB_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
-#[cfg(feature = "websearch")]
 const PAGE_FETCH_TIMEOUT: Duration = Duration::from_secs(4);
-#[cfg(feature = "websearch")]
 const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
 const CONCURRENT_WEB_QUERIES: usize = 2;
 
@@ -56,13 +53,9 @@ impl WebFetcher for NoopWebFetcher {
         Box::pin(async { Vec::new() })
     }
 }
-
-#[cfg(feature = "websearch")]
 pub struct HttpWebFetcher {
     client: Option<reqwest::Client>,
 }
-
-#[cfg(feature = "websearch")]
 impl HttpWebFetcher {
     pub fn new() -> Self {
         Self {
@@ -70,15 +63,11 @@ impl HttpWebFetcher {
         }
     }
 }
-
-#[cfg(feature = "websearch")]
 impl Default for HttpWebFetcher {
     fn default() -> Self {
         Self::new()
     }
 }
-
-#[cfg(feature = "websearch")]
 impl WebFetcher for HttpWebFetcher {
     fn search<'a>(
         &'a self,
@@ -107,8 +96,6 @@ impl WebFetcher for HttpWebFetcher {
         })
     }
 }
-
-#[cfg(feature = "websearch")]
 async fn fetch_page_body(client: &reqwest::Client, url: &str) -> Option<String> {
     let response = client
         .get(url)
@@ -138,8 +125,6 @@ async fn fetch_page_body(client: &reqwest::Client, url: &str) -> Option<String> 
     let bytes = response.bytes().await.ok()?;
     (bytes.len() <= MAX_PAGE_BYTES).then(|| String::from_utf8_lossy(&bytes).into_owned())
 }
-
-#[cfg(feature = "websearch")]
 async fn fetch_hits(
     client: &reqwest::Client,
     spec: &'static WebEngineSpec,
@@ -169,14 +154,8 @@ async fn fetch_hits(
     Some(parse_hits(spec, &body, max_hits))
 }
 
-#[cfg(feature = "websearch")]
 pub fn default_fetcher() -> Arc<dyn WebFetcher> {
     Arc::new(HttpWebFetcher::new())
-}
-
-#[cfg(not(feature = "websearch"))]
-pub fn default_fetcher() -> Arc<dyn WebFetcher> {
-    Arc::new(NoopWebFetcher)
 }
 
 pub async fn websearch_stage(
@@ -294,6 +273,8 @@ mod tests {
     use crate::core::plan::SubQuery;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
     use tokio::sync::mpsc;
 
     struct FakeFetcher {
@@ -518,5 +499,87 @@ mod tests {
         assert_eq!(hits, vec![Vec::new()]);
         assert!(events.is_empty());
         assert!(fetcher.called().is_empty());
+    }
+
+    async fn serve_page(body_len: usize, declare_length: bool) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/page", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut request = vec![0_u8; 4096];
+            let _ = stream.read(&mut request).await;
+            let length = if declare_length {
+                format!("Content-Length: {body_len}\r\n")
+            } else {
+                String::new()
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n{length}Connection: close\r\n\r\n"
+            );
+            let _ = stream.write_all(head.as_bytes()).await;
+            let _ = stream.write_all(&vec![b'x'; body_len]).await;
+            let _ = stream.flush().await;
+        });
+        url
+    }
+
+    #[tokio::test]
+    async fn a_fetched_page_is_kept_up_to_two_megabytes_and_no_further() {
+        const TWO_MIB: usize = 2_097_152;
+        struct Case {
+            name: &'static str,
+            body_len: usize,
+            declare_length: bool,
+            want_kept: bool,
+        }
+        let cases = [
+            Case {
+                name: "a page of exactly two megabytes is kept",
+                body_len: TWO_MIB,
+                declare_length: true,
+                want_kept: true,
+            },
+            Case {
+                name: "one byte over the cap is refused from the declared length",
+                body_len: TWO_MIB + 1,
+                declare_length: true,
+                want_kept: false,
+            },
+            Case {
+                name: "one byte over the cap is refused after reading when no length is declared",
+                body_len: TWO_MIB + 1,
+                declare_length: false,
+                want_kept: false,
+            },
+        ];
+        let client = crate::pipeline::http::build_client().expect("the shared client builds");
+        for case in cases {
+            let url = serve_page(case.body_len, case.declare_length).await;
+            let body = fetch_page_body(&client, &url).await;
+            assert_eq!(body.is_some(), case.want_kept, "{}", case.name);
+            if let Some(body) = body {
+                assert_eq!(body.len(), case.body_len, "{}", case.name);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_fetched_page_that_is_not_html_is_dropped() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/page", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut request = vec![0_u8; 4096];
+            let _ = stream.read(&mut request).await;
+            let response = "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc";
+            let _ = stream.write_all(response.as_bytes()).await;
+            let _ = stream.flush().await;
+        });
+        let client = crate::pipeline::http::build_client().expect("the shared client builds");
+        assert!(fetch_page_body(&client, &url).await.is_none());
     }
 }
