@@ -288,9 +288,10 @@ entries, with unparsable lines skipped rather than fatal.
 ## Development
 
 ```sh
-make hooks      # install pre-commit hooks (fmt, clippy, tests, no-comments guard...)
+make hooks      # install cargo-mutants + the hooks (fmt, clippy, tests, no-comments guard...)
 make test       # run the full test suite (fake engine, no network, no AI calls)
-make ci         # what CI runs: fmt-check + clippy -D warnings + tests + release build
+make mutants    # mutation-test the lines you changed against origin/main
+make ci         # fmt-check + clippy -D warnings + tests + release build
 ```
 
 The project follows TDD with table-driven tests, a pure functional core (zero I/O in

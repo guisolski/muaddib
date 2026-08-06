@@ -15,11 +15,12 @@ make test
 | `make` / `make help` | list every target (default) |
 | `make build` / `make release` | debug / release build |
 | `make test` | `cargo test --all-features` |
+| `make mutants` | mutation-test the lines changed against `origin/main` |
 | `make lint` | clippy, all targets, `-D warnings` |
 | `make fmt` / `make fmt-check` | rustfmt |
 | `make precommit` | run every pre-commit hook against all files |
 | `make eval` | score the golden queries against a **real** AI CLI and rewrite `docs/eval-baseline.md` |
-| `make ci` | exactly what CI runs: fmt-check + lint + test + release |
+| `make ci` | fmt-check + lint + test + release (mutation runs as its own PR-only job) |
 | `make install` | `cargo install --path .` |
 
 ## Conventions
@@ -47,7 +48,8 @@ make test
   whitelisted in `typos.toml`), the no-comments guard, `cargo fmt --check`,
   `cargo clippy -D warnings`
 - **commit-msg**: conventional commit format
-- **pre-push**: `cargo test --all-features`
+- **pre-push**: `cargo test --all-features`, then `cargo mutants` over the
+  changed lines
 
 ## The fake engine harness
 
@@ -65,6 +67,54 @@ Test layers:
 | unit | `#[cfg(test)]` in each module | all pure core, parsing, widgets, reducer |
 | integration | `tests/pipeline_integration.rs` | full pipeline over real subprocesses |
 | smoke | `tests/cli_smoke.rs` | the compiled binary, `--print` mode, exit codes |
+| mutation | `make mutants` | whether those tests actually assert |
+
+## Mutation testing
+
+`cargo test` tells you the tests pass. It cannot tell you they would *fail* if the
+code were wrong — a test that calls a function and only checks it did not panic
+counts toward the total like any other. `make mutants` closes that gap (ADR-0016):
+it perturbs the source (flips a comparison, returns a default, drops a branch) and
+reports every mutant the suite failed to catch.
+
+```sh
+make mutants     # the same thing the pre-push hook and PR CI run
+```
+
+**It only mutates what you changed.** A full run over 22k lines takes hours, so
+both the hook and the CI job pass `--in-diff` and test only mutants on lines your
+change touched. That is fast enough to gate a push — a typical change is a few
+minutes — and it puts the pressure on new code, where the missing assertion is
+cheap to add.
+
+The local diff is taken with a **single ref and no `..`** (`git diff <merge-base>
+-- src`), which compares against the working tree rather than a commit. That
+matters: `cargo mutants --in-diff` exits 5 when the diff's new side does not match
+the tree it mutates, and the pre-commit framework does not stash unstaged work at
+the pre-push stage. Diffing against the tree makes the two match by construction,
+dirty or clean.
+
+**When a mutant survives**, `mutants.out/missed.txt` names the function and the
+mutation that went unnoticed. Almost always the right fix is the assertion you
+skipped — a new row in the module's `Case` table whose `want` actually pins the
+behavior the mutant changed. Reach for an `exclude_re` entry in
+`.cargo/mutants.toml` only when the mutant is genuinely unobservable, and say why.
+
+`.cargo/mutants.toml` already excludes 13 files with zero unit tests — `main.rs`,
+the filesystem and HTTP shims, and the render-only views. Every mutant in them
+would survive, which would drown the signal. The exclusion is per *file*, not per
+directory: six of the nine files in `src/tui/view/` are tested and stay in scope,
+and so does `tui/update.rs`, which despite its location is a pure reducer with 48
+tests and one of the best targets in the crate.
+
+Two settings worth knowing before you change them. The timeout floor is raised to
+60s because `tests/pipeline_integration.rs` uses 20s internal deadlines — at the
+default 20s floor, a mutant that neutralizes a timeout gets killed and misreported
+as TIMEOUT instead of the CAUGHT it really is. And runs stay single-threaded
+because `tests/cli_smoke.rs` writes to a fixed path under `std::env::temp_dir()`
+that parallel mutant jobs would collide on, producing false CAUGHT results.
+
+To push past a survivor you have decided not to fix: `SKIP=cargo-mutants git push`.
 
 ## Measuring answer quality
 

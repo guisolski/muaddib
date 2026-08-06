@@ -28,10 +28,11 @@ the network, filesystem, or terminal.
 ```sh
 make build        # cargo build
 make test         # cargo test --all-features
+make mutants      # mutation-test the lines changed against origin/main
 make lint         # cargo clippy --all-targets --all-features -- -D warnings
 make fmt-check    # cargo fmt --all -- --check
 make ci           # fmt-check + lint + test + release — run before calling anything done
-make hooks        # install pre-commit/commit-msg/pre-push hooks once per clone
+make hooks        # install cargo-mutants + the git hooks once per clone
 ```
 
 ## Conventions
@@ -94,6 +95,11 @@ not just convention:
 | unit | `#[cfg(test)]` in each module | pure core, parsing, widgets, reducer |
 | integration | `tests/pipeline_integration.rs` | full pipeline over a fake-engine subprocess |
 | smoke | `tests/cli_smoke.rs` | the compiled binary, `--print` mode, exit codes |
+| mutation | `make mutants`, pre-push + PR CI | whether those tests actually assert |
+
+Mutation runs are scoped to the diff and **block** the push and the PR. If one
+survives, the fix is the missing assertion, not an exclusion — see
+[`docs/adr/0016-mutation-testing.md`](docs/adr/0016-mutation-testing.md).
 
 Tests never call a real AI CLI — `tests/fixtures/fake-engine.sh` answers
 with fixture JSON keyed on the prompt's task marker.

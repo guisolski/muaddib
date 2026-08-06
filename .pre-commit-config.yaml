@@ -62,3 +62,10 @@ repos:
         types: [rust]
         pass_filenames: false
         stages: [pre-push]
+      - id: cargo-mutants
+        name: cargo mutants on the changed lines
+        entry: scripts/mutants_in_diff.sh
+        language: system
+        types: [rust]
+        pass_filenames: false
+        stages: [pre-push]
