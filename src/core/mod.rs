@@ -1,4 +1,5 @@
 pub mod answer;
+pub mod api;
 pub mod citations;
 pub mod config;
 pub mod context;
@@ -17,4 +18,5 @@ pub mod readability;
 pub mod reflect;
 pub mod stream;
 pub mod tree;
+pub mod vault;
 pub mod websearch;

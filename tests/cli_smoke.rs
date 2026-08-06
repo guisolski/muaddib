@@ -33,8 +33,44 @@ fn muaddib(config: &PathBuf, history: &PathBuf) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_muaddib"));
     command
         .env("MUADDIB_CONFIG", config)
-        .env("MUADDIB_HISTORY", history);
+        .env("MUADDIB_HISTORY", history)
+        .env("MUADDIB_KEYS", smoke_dir().join("absent-keys.enc"));
+    for name in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "MUADDIB_LOCAL_API_KEY",
+        "OPENAI_BASE_URL",
+        "ANTHROPIC_BASE_URL",
+        "OLLAMA_HOST",
+    ] {
+        command.env_remove(name);
+    }
     command
+}
+
+#[test]
+fn an_api_engine_without_a_key_is_reported_unavailable_and_never_called() {
+    let config = write_smoke_config("config-no-key.toml");
+    let history = history_path("history-no-key.jsonl");
+    let output = muaddib(&config, &history)
+        .args(["--engine", "openai", "--print", "rust async runtimes"])
+        .output()
+        .expect("binary runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("panicked"), "must not panic: {stderr}");
+    assert!(
+        stderr.contains("engine 'openai' is not available"),
+        "stderr should say why: {stderr}"
+    );
+    assert!(
+        stderr.contains("using 'claude'"),
+        "an unkeyed api engine must never be billed: {stderr}"
+    );
+    let answer: Answer =
+        serde_json::from_slice(&output.stdout).expect("the fallback still answers");
+    assert_eq!(answer.title, "Rust async runtimes");
 }
 
 #[test]

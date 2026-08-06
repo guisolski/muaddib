@@ -9,6 +9,9 @@ pub struct StreamTool {
     pub target_key: &'static str,
 }
 
+pub const ASKING_LABEL: &str = "asking";
+pub const RETRY_LABEL: &str = "retrying";
+
 pub const STREAM_TOOLS: &[StreamTool] = &[
     StreamTool {
         tool: "WebSearch",

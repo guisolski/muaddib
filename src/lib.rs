@@ -5,3 +5,4 @@ pub mod history_store;
 pub mod pipeline;
 pub mod tree_store;
 pub mod tui;
+pub mod vault_store;

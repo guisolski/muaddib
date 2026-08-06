@@ -59,6 +59,7 @@ Nothing is written unless you press `s` — the tree is in-memory by default.
 ```toml
 language = "pt-BR"          # answer language, BCP-47 tag
 engine = "claude"           # claude | cursor-agent | codex | opencode
+                            # | ollama | local | openai | anthropic | gemini
 max_parallel = 4            # concurrent sub-searches, clamped to 1..=8
 expansion_breadth = 0       # 0 = use the mode default, otherwise clamped to 1..=8
 validate_links = true       # HTTP HEAD validation of every source
@@ -84,13 +85,81 @@ ground_top_n = 3            # pages fetched per sub-query, clamped to 1..=5
 ground_page_chars = 4000    # extracted chars kept per page, clamped to 500..=20000
 
 [engines.claude]            # optional, one block per engine
-bin = "/custom/path/claude" # binary override (also used by the test suite)
+bin = "/custom/path/claude" # binary override (also used by the test suite); CLI rows only
 model = "sonnet"            # model passed to the CLI; any value the CLI accepts
 fast_model = "haiku"        # model used in fast mode; falls back to the engine's curated one
+
+[engines.anthropic]         # the same block also configures API rows
+base_url = "https://api.anthropic.com"
+api_key_env = "WORK_ANTHROPIC_KEY"   # read this variable instead of the default one
+max_tokens = 16384
 ```
 
 Unknown keys are tolerated (forward compatibility). Out-of-range numbers are
 clamped, not rejected.
+
+**No key material belongs in this file.** `api_key_env` names a *variable*, never a
+key. There is no config key that holds one, because muaddib rewrites this whole file
+on every save from the config modal — see [the key vault](#the-key-vault).
+
+### Model APIs
+
+Five engines talk HTTP instead of spawning a binary:
+
+| engine | endpoint | key variable | notes |
+|---|---|---|---|
+| `ollama` | `$OLLAMA_HOST`, else `http://localhost:11434` | none | probed live; the model picker lists what you pulled |
+| `local` | `$MUADDIB_LOCAL_BASE_URL`, else `$OPENAI_BASE_URL` | `$MUADDIB_LOCAL_API_KEY` (optional) | any OpenAI-compatible server |
+| `openai` | `$OPENAI_BASE_URL`, else `api.openai.com` | `$OPENAI_API_KEY` | billed |
+| `anthropic` | `$ANTHROPIC_BASE_URL`, else `api.anthropic.com` | `$ANTHROPIC_API_KEY` | billed |
+| `gemini` | `generativelanguage.googleapis.com` | `$GEMINI_API_KEY`, then `$GOOGLE_API_KEY` | billed |
+
+The three billed rows are **never chosen by the automatic fallback**. If the engine you
+configured is unavailable, muaddib drops to a free one; reaching a paid API always takes
+an explicit `--engine` or `engine =`.
+
+Nothing extra is needed for a local model:
+
+```sh
+ollama serve && ollama pull qwen3:8b
+muaddib --engine ollama --print "what is a sandworm"
+```
+
+### The key vault
+
+Keys typed into the config modal's **api key** field are sealed into a vault file, never
+into `config.toml`. Resolution order at call time, first match wins:
+
+1. `[engines.<name>] api_key_env` → that variable
+2. the engine's own variable, from the table above
+3. the vault, which asks for your passphrase once per session
+
+Step 2 is what keeps `--print` and CI working with no passphrase at all.
+
+Location, resolved like the other state files:
+
+1. `$MUADDIB_KEYS` — explicit path (also the test seam)
+2. `$XDG_STATE_HOME/muaddib/keys.enc`
+3. `~/.local/state/muaddib/keys.enc`
+
+Written mode `0600`, temp-file-and-rename, and pointedly not through the config writer.
+Format:
+
+```
+"MUADDIB1" | version | argon2id params | salt | nonce | names_len | names || ciphertext+tag
+```
+
+- **Argon2id** (19456 KiB, t=2, p=1 — the OWASP floor) derives the key from your
+  passphrase
+- **XChaCha20-Poly1305** seals the key material, with the **whole header as associated
+  data** — so the KDF parameters cannot be downgraded and the name list cannot be edited
+  without the open failing
+- The header's **plaintext name list** says *which* engines have a key, so startup can
+  show availability without asking for the passphrase. It never contains key material.
+- The passphrase lives in memory for the session only
+
+If you forget the passphrase there is no recovery: delete `keys.enc` and re-enter the
+keys. That is the intended property.
 
 ### SearXNG
 
@@ -124,6 +193,8 @@ CLI flags > config file > defaults:
 | search mode | `--mode` | — | `general` (`scientific`, `news`, `code`, `forums`, `deep`, `exhaustive`) |
 | fast mode | `--fast` | — | off (`Ctrl+F` toggles it in the TUI) |
 | web search | `--no-websearch` (disables) | `[websearch] enabled` | on |
+| api key | — | *(never in config)* | `$<PROVIDER>_API_KEY`, else the vault |
+| base url | — | `[engines.<name>] base_url` | `$<PROVIDER>_BASE_URL`, else the table |
 
 The config modal (`Ctrl+O`) edits and persists the file; `--lang`/`--engine`/
 `--model` apply to the current run only.
@@ -214,13 +285,24 @@ root. `--print` ignores sessions: stdout stays a bare `Answer` document.
 
 ## The config modal
 
-| Field | Values |
-|---|---|
-| language | cycles `en`, `pt-BR`, `es`, `fr`, `de`, `it`, `ja`, `zh` (any BCP-47 tag works via `--lang` or the file) |
-| engine | cycles installed engines; uninstalled ones are shown but not selectable |
-| model | cycles `default` plus a curated list per engine; a custom model set in the file appears as an extra option |
-| validate links | on / off |
-| web search | on / off |
-| max parallel | 1–8 |
+The rows shown depend on the selected engine — a field only appears when that engine
+can actually use it. `api key` and `base url` are absent for the CLI engines, and
+`api key` is absent for the keyless `ollama`.
 
-`Enter` saves to the config file; `Esc` discards.
+| Field | Shown for | Values |
+|---|---|---|
+| language | every engine | cycles `en`, `pt-BR`, `es`, `fr`, `de`, `it`, `ja`, `zh` (any BCP-47 tag works via `--lang` or the file) |
+| engine | every engine | cycles the whole table; an engine that is not ready yet reads `openai (no key)` and stays selectable, so you can configure it |
+| model | every engine | cycles `default` plus a curated list per engine; for `ollama` and `local` the list is what the probe found installed |
+| api key | engines that authenticate | `Enter` starts editing, `Enter` again saves, `Esc` discards. Displayed masked, sealed into the vault, never written to `config.toml` |
+| base url | engines reached over HTTP | `Enter` starts editing, `Enter` again saves. Persisted as `[engines.<name>] base_url` |
+| validate links | every engine | on / off |
+| web search | every engine | on / off |
+| max parallel | every engine | 1–8 |
+
+`Enter` saves to the config file; `Esc` discards. Saving re-runs engine detection,
+so an engine becomes available as soon as its key or base url lands.
+
+Because the engine row walks the full table, an engine with nothing configured can
+still be selected. Searching with one falls back to an available engine and says so
+in a notice — it never silently bills a provider you have not set up.

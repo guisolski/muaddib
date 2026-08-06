@@ -3,6 +3,7 @@ pub mod doc;
 pub mod followup;
 pub mod help;
 pub mod home;
+pub mod passphrase_modal;
 pub mod results;
 pub mod searching;
 pub mod tree;
@@ -21,6 +22,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Some(Overlay::Help) => help::draw(frame, app.help_scroll),
         Some(Overlay::Config(form)) => config_modal::draw(frame, app, form),
         Some(Overlay::FollowUp(form)) => followup::draw(frame, app, form),
+        Some(Overlay::Passphrase(form)) => passphrase_modal::draw(frame, form),
         None => {}
     }
 }
@@ -40,9 +42,12 @@ mod tests {
         let statuses: Vec<EngineStatus> = ENGINES
             .iter()
             .map(|spec| EngineStatus {
+                key_from_env: false,
                 spec,
                 available: true,
                 path: Some(PathBuf::from("/fake/bin")),
+                endpoint: None,
+                models: spec.models.iter().map(ToString::to_string).collect(),
             })
             .collect();
         let mut app = App::new(Config::default(), statuses, None, false);

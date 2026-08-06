@@ -1,10 +1,12 @@
+use crate::core::engine::EngineSpec;
 use crate::core::export::{ExportContext, suggested_filename, to_markdown};
 use crate::core::mode::MODES;
 use crate::core::tree::{NodeId, NodeSeed};
+use crate::core::vault::Passphrase;
 use crate::pipeline::SearchEvent;
 use crate::tui::app::{
-    App, ConfigField, ConfigForm, Focus, FollowUpForm, LANGUAGES, Overlay, Screen, Viewport,
-    configured_model_idx, model_choices,
+    App, ConfigField, ConfigForm, Focus, FollowUpForm, LANGUAGES, Overlay, PassphraseForm, Screen,
+    Viewport, configured_model_idx, model_choices, visible_config_fields,
 };
 use crate::tui::event::{AppEvent, Command};
 use crate::tui::keymap::{Action, Scope, resolve};
@@ -33,6 +35,10 @@ pub fn update(app: &mut App, event: AppEvent) -> Option<Command> {
 fn scope_of(app: &App) -> Scope {
     match &app.overlay {
         Some(Overlay::FollowUp(_)) => return Scope::FollowUp,
+        Some(Overlay::Passphrase(_)) => return Scope::Entry,
+        Some(Overlay::Config(form)) if form.editing_key || form.editing_url => {
+            return Scope::Entry;
+        }
         Some(_) => return Scope::Modal,
         None => {}
     }
@@ -75,6 +81,22 @@ fn forward_key_to_input(app: &mut App, scope: Scope, key: &KeyEvent) {
                 form.input.handle_event(&crossterm::event::Event::Key(*key));
             }
         }
+        Scope::Entry => match app.overlay.as_mut() {
+            Some(Overlay::Passphrase(form)) => {
+                form.error = None;
+                form.active()
+                    .handle_event(&crossterm::event::Event::Key(*key));
+            }
+            Some(Overlay::Config(form)) => {
+                let input = if form.editing_key {
+                    &mut form.key_input
+                } else {
+                    &mut form.url_input
+                };
+                input.handle_event(&crossterm::event::Event::Key(*key));
+            }
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -168,14 +190,16 @@ fn perform(app: &mut App, action: Action) -> Option<Command> {
         Action::CopyAnswer => copy_answer(app),
         Action::ExportAnswer => export_answer(app),
         Action::FieldNext | Action::FieldPrev | Action::ValueNext | Action::ValuePrev => {
-            if matches!(app.overlay, Some(Overlay::Help)) {
-                scroll_help(app, action);
-            } else {
-                edit_config_form(app, action);
+            match app.overlay.as_mut() {
+                Some(Overlay::Help) => scroll_help(app, action),
+                Some(Overlay::Passphrase(form)) => {
+                    form.on_confirm = !form.on_confirm;
+                }
+                _ => edit_config_form(app, action),
             }
             None
         }
-        Action::Confirm => confirm_config(app),
+        Action::Confirm => confirm(app),
     }
 }
 
@@ -211,7 +235,17 @@ fn scroll_help(app: &mut App, action: Action) {
 }
 
 fn go_back(app: &mut App) -> Option<Command> {
+    if let Some(Overlay::Config(form)) = app.overlay.as_mut()
+        && (form.editing_key || form.editing_url)
+    {
+        form.key_input.reset();
+        form.url_input.reset();
+        form.editing_key = false;
+        form.editing_url = false;
+        return None;
+    }
     if app.overlay.is_some() {
+        app.pending_keys.clear();
         app.overlay = None;
         return None;
     }
@@ -562,7 +596,7 @@ fn clamp_scroll(app: &mut App) {
 
 struct FormContext {
     statuses_len: usize,
-    available: Vec<usize>,
+    specs: Vec<&'static EngineSpec>,
     model_counts: Vec<usize>,
     configured_model_idxs: Vec<usize>,
 }
@@ -571,24 +605,26 @@ impl FormContext {
     fn from_app(app: &App) -> Self {
         Self {
             statuses_len: app.statuses.len(),
-            available: app
-                .statuses
-                .iter()
-                .enumerate()
-                .filter(|(_, status)| status.available)
-                .map(|(index, _)| index)
-                .collect(),
+            specs: app.statuses.iter().map(|status| status.spec).collect(),
             model_counts: app
                 .statuses
                 .iter()
-                .map(|status| model_choices(&app.config, status.spec).len())
+                .map(|status| model_choices(&app.config, status).len())
                 .collect(),
             configured_model_idxs: app
                 .statuses
                 .iter()
-                .map(|status| configured_model_idx(&app.config, status.spec))
+                .map(|status| configured_model_idx(&app.config, status))
                 .collect(),
         }
+    }
+
+    fn spec_at(&self, engine_idx: usize) -> Option<&'static EngineSpec> {
+        self.specs.get(engine_idx).copied()
+    }
+
+    fn visible_len(&self, engine_idx: usize) -> usize {
+        visible_config_fields(self.spec_at(engine_idx)).len()
     }
 }
 
@@ -597,14 +633,13 @@ fn edit_config_form(app: &mut App, action: Action) {
     let Some(Overlay::Config(form)) = app.overlay.as_mut() else {
         return;
     };
+    if form.editing_key || form.editing_url {
+        return;
+    }
+    let len = context.visible_len(form.engine_idx);
     match action {
-        Action::FieldNext => {
-            form.field_idx = (form.field_idx + 1) % super::app::CONFIG_FIELDS.len();
-        }
-        Action::FieldPrev => {
-            let len = super::app::CONFIG_FIELDS.len();
-            form.field_idx = (form.field_idx + len - 1) % len;
-        }
+        Action::FieldNext => form.field_idx = (form.field_idx + 1) % len,
+        Action::FieldPrev => form.field_idx = (form.field_idx + len - 1) % len,
         Action::ValueNext => step_config_value(form, 1, &context),
         Action::ValuePrev => step_config_value(form, -1, &context),
         _ => {}
@@ -612,17 +647,12 @@ fn edit_config_form(app: &mut App, action: Action) {
 }
 
 fn step_config_value(form: &mut ConfigForm, step: i8, context: &FormContext) {
-    match form.field() {
+    match form.field_of(context.spec_at(form.engine_idx)) {
         ConfigField::Language => {
             form.language_idx = cycle(form.language_idx, LANGUAGES.len(), step);
         }
         ConfigField::Engine => {
-            form.engine_idx = next_available_engine(
-                form.engine_idx,
-                context.statuses_len,
-                &context.available,
-                step,
-            );
+            form.engine_idx = cycle(form.engine_idx, context.statuses_len, step);
             form.model_idx = context
                 .configured_model_idxs
                 .get(form.engine_idx)
@@ -637,6 +667,7 @@ fn step_config_value(form: &mut ConfigForm, step: i8, context: &FormContext) {
                 .unwrap_or(1);
             form.model_idx = cycle(form.model_idx, count, step);
         }
+        ConfigField::ApiKey | ConfigField::BaseUrl => {}
         ConfigField::ValidateLinks => form.validate_links = !form.validate_links,
         ConfigField::WebSearch => form.websearch = !form.websearch,
         ConfigField::MaxParallel => {
@@ -658,33 +689,76 @@ fn cycle(index: usize, len: usize, step: i8) -> usize {
     raw.rem_euclid(len as i64) as usize
 }
 
-fn next_available_engine(
-    current: usize,
-    statuses_len: usize,
-    available: &[usize],
-    step: i8,
-) -> usize {
-    if available.is_empty() || statuses_len == 0 {
-        return current;
+fn confirm(app: &mut App) -> Option<Command> {
+    match app.overlay {
+        Some(Overlay::Passphrase(_)) => confirm_passphrase(app),
+        Some(Overlay::Config(_)) => confirm_config(app),
+        _ => None,
     }
-    let mut candidate = current;
-    for _ in 0..statuses_len {
-        candidate = cycle(candidate, statuses_len, step);
-        if available.contains(&candidate) {
-            return candidate;
-        }
-    }
-    current
 }
 
 fn confirm_config(app: &mut App) -> Option<Command> {
+    if let Some(Overlay::Config(form)) = app.overlay.as_mut() {
+        let spec = app.statuses.get(form.engine_idx).map(|status| status.spec);
+        if form.editing_key || form.editing_url {
+            form.editing_key = false;
+            form.editing_url = false;
+        } else {
+            match form.field_of(spec) {
+                ConfigField::ApiKey => {
+                    form.editing_key = true;
+                    return None;
+                }
+                ConfigField::BaseUrl => {
+                    form.editing_url = true;
+                    return None;
+                }
+                _ => {}
+            }
+        }
+    }
     let Some(Overlay::Config(form)) = app.overlay.clone() else {
         return None;
     };
     let statuses = app.statuses.clone();
     form.apply_to(&mut app.config, &statuses);
-    app.overlay = None;
-    Some(Command::SaveConfig)
+    if let Some((engine, key)) = form.typed_key(&statuses) {
+        app.pending_keys.insert(engine, key);
+    }
+    if app.pending_keys.is_empty() {
+        app.overlay = None;
+        return Some(Command::SaveConfig);
+    }
+    if let Some(passphrase) = app.passphrase.clone() {
+        app.overlay = None;
+        return Some(Command::UnlockVault { passphrase });
+    }
+    app.overlay = Some(Overlay::Passphrase(PassphraseForm::new(
+        app.vaulted.is_empty(),
+    )));
+    None
+}
+
+fn confirm_passphrase(app: &mut App) -> Option<Command> {
+    let Some(Overlay::Passphrase(form)) = app.overlay.as_mut() else {
+        return None;
+    };
+    if form.creating && !form.on_confirm && form.confirm.value().is_empty() {
+        form.on_confirm = true;
+        return None;
+    }
+    match form.validated() {
+        Ok(passphrase) => {
+            app.overlay = None;
+            Some(Command::UnlockVault {
+                passphrase: Passphrase::new(passphrase),
+            })
+        }
+        Err(message) => {
+            form.error = Some(message.to_string());
+            None
+        }
+    }
 }
 
 fn apply_search_event(app: &mut App, event: SearchEvent) -> Option<Command> {
@@ -758,9 +832,12 @@ mod tests {
             .iter()
             .enumerate()
             .map(|(index, spec)| EngineStatus {
+                key_from_env: false,
                 spec,
                 available: index < 2,
                 path: (index < 2).then(|| PathBuf::from("/fake/bin")),
+                endpoint: None,
+                models: spec.models.iter().map(ToString::to_string).collect(),
             })
             .collect()
     }
@@ -1408,15 +1485,492 @@ mod tests {
         );
     }
 
+    fn typed(app: &mut App, text: &str) {
+        for character in text.chars() {
+            update(app, key(KeyCode::Char(character)));
+        }
+    }
+
+    fn open_config_on(app: &mut App, engine: &str) {
+        update(app, ctrl('o'));
+        let index = app
+            .statuses
+            .iter()
+            .position(|status| status.spec.name == engine)
+            .expect("engine is in the table");
+        let Some(Overlay::Config(form)) = app.overlay.as_mut() else {
+            panic!("config overlay is open");
+        };
+        form.engine_idx = index;
+    }
+
+    #[test]
+    fn entering_a_key_stashes_it_and_asks_for_a_passphrase() {
+        let mut app = app();
+        open_config_on(&mut app, "anthropic");
+        go_to_field(&mut app, ConfigField::ApiKey);
+        assert_eq!(update(&mut app, key(KeyCode::Enter)), None);
+        typed(&mut app, "sk-ant-secret");
+        assert_eq!(update(&mut app, key(KeyCode::Enter)), None);
+        assert_eq!(
+            app.pending_keys.get("anthropic").map(String::as_str),
+            Some("sk-ant-secret")
+        );
+        assert!(matches!(app.overlay, Some(Overlay::Passphrase(_))));
+    }
+
+    #[test]
+    fn saving_the_config_never_writes_key_material_to_the_config_file() {
+        let mut app = app();
+        open_config_on(&mut app, "anthropic");
+        go_to_field(&mut app, ConfigField::ApiKey);
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "sk-ant-donotleak");
+        update(&mut app, key(KeyCode::Enter));
+        let rendered = crate::core::config::to_toml(&app.config);
+        assert!(!rendered.contains("sk-ant-donotleak"), "{rendered}");
+        assert!(!rendered.contains("sk-"), "{rendered}");
+    }
+
+    #[test]
+    fn typed_key_characters_never_reach_the_query_input() {
+        let mut app = app();
+        open_config_on(&mut app, "anthropic");
+        go_to_field(&mut app, ConfigField::ApiKey);
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "sk-jjkk");
+        assert_eq!(app.input.value(), "");
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay is open");
+        };
+        assert_eq!(form.key_input.value(), "sk-jjkk");
+    }
+
+    #[test]
+    fn escape_while_editing_discards_the_key_without_closing_the_modal() {
+        let mut app = app();
+        open_config_on(&mut app, "anthropic");
+        go_to_field(&mut app, ConfigField::ApiKey);
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "sk-ant-secret");
+        assert_eq!(update(&mut app, key(KeyCode::Esc)), None);
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay stays open");
+        };
+        assert_eq!(form.key_input.value(), "");
+        assert!(!form.editing_key);
+        assert!(app.pending_keys.is_empty());
+    }
+
+    #[test]
+    fn the_modal_only_shows_the_fields_the_selected_engine_can_use() {
+        struct Case {
+            name: &'static str,
+            engine: &'static str,
+            want_key: bool,
+            want_url: bool,
+        }
+        let cases = [
+            Case {
+                name: "a cli engine has neither",
+                engine: "claude",
+                want_key: false,
+                want_url: false,
+            },
+            Case {
+                name: "a keyless local server is addressable only",
+                engine: "ollama",
+                want_key: false,
+                want_url: true,
+            },
+            Case {
+                name: "a hosted api takes both",
+                engine: "anthropic",
+                want_key: true,
+                want_url: true,
+            },
+        ];
+        for case in cases {
+            let mut app = app();
+            open_config_on(&mut app, case.engine);
+            let labels = visible_labels(&app);
+            assert_eq!(
+                labels.contains(&"api key"),
+                case.want_key,
+                "{}: {labels:?}",
+                case.name
+            );
+            assert_eq!(
+                labels.contains(&"base url"),
+                case.want_url,
+                "{}: {labels:?}",
+                case.name
+            );
+            assert!(labels.contains(&"model"), "{}: {labels:?}", case.name);
+            assert!(labels.contains(&"language"), "{}: {labels:?}", case.name);
+        }
+    }
+
+    #[test]
+    fn walking_the_fields_of_an_api_engine_wraps_only_after_its_extra_rows() {
+        let mut app = app();
+        open_config_on(&mut app, "openai");
+        let count = visible_labels(&app).len();
+        assert_eq!(
+            count,
+            8,
+            "openai shows both api rows: {:?}",
+            visible_labels(&app)
+        );
+        let mut visited = Vec::new();
+        for _ in 0..count {
+            let Some(Overlay::Config(form)) = &app.overlay else {
+                panic!("config overlay is open");
+            };
+            visited.push(form.field(&app.statuses));
+            update(&mut app, key(KeyCode::Down));
+        }
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay is open");
+        };
+        assert_eq!(
+            form.field_idx, 0,
+            "the walk wraps after the last visible row"
+        );
+        assert!(visited.contains(&ConfigField::ApiKey), "{visited:?}");
+        assert!(visited.contains(&ConfigField::BaseUrl), "{visited:?}");
+    }
+
+    #[test]
+    fn walking_the_fields_backwards_wraps_onto_the_last_visible_row() {
+        struct Case {
+            name: &'static str,
+            engine: &'static str,
+            rows: usize,
+        }
+        let cases = [
+            Case {
+                name: "a cli engine wraps onto its sixth row",
+                engine: "claude",
+                rows: 6,
+            },
+            Case {
+                name: "an api engine wraps onto its eighth row",
+                engine: "openai",
+                rows: 8,
+            },
+        ];
+        for case in cases {
+            let mut app = app();
+            open_config_on(&mut app, case.engine);
+            assert_eq!(visible_labels(&app).len(), case.rows, "{}", case.name);
+            update(&mut app, key(KeyCode::Up));
+            let Some(Overlay::Config(form)) = &app.overlay else {
+                panic!("config overlay is open");
+            };
+            assert_eq!(form.field_idx, case.rows - 1, "{}", case.name);
+            assert_eq!(
+                form.field(&app.statuses),
+                ConfigField::MaxParallel,
+                "{}",
+                case.name
+            );
+            update(&mut app, key(KeyCode::Up));
+            let Some(Overlay::Config(form)) = &app.overlay else {
+                panic!("config overlay is open");
+            };
+            assert_eq!(
+                form.field(&app.statuses),
+                ConfigField::WebSearch,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn arrows_on_a_text_row_never_reach_the_toggle_below_it() {
+        let mut app = app();
+        open_config_on(&mut app, "openai");
+        go_to_field(&mut app, ConfigField::ApiKey);
+        let before = match &app.overlay {
+            Some(Overlay::Config(form)) => form.clone(),
+            _ => panic!("config overlay is open"),
+        };
+        update(&mut app, key(KeyCode::Right));
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay is open");
+        };
+        assert_eq!(*form, before, "an arrow on the key row must be inert");
+    }
+
+    #[test]
+    fn a_base_url_typed_into_the_modal_is_saved_without_a_passphrase() {
+        let mut app = app();
+        open_config_on(&mut app, "local");
+        go_to_field(&mut app, ConfigField::BaseUrl);
+        assert_eq!(update(&mut app, key(KeyCode::Enter)), None);
+        typed(&mut app, "http://127.0.0.1:1234");
+        assert_eq!(
+            update(&mut app, key(KeyCode::Enter)),
+            Some(Command::SaveConfig)
+        );
+        assert_eq!(
+            app.config.base_url_override("local"),
+            Some("http://127.0.0.1:1234")
+        );
+        assert!(app.pending_keys.is_empty());
+        assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn base_url_characters_never_reach_the_query_input() {
+        let mut app = app();
+        open_config_on(&mut app, "ollama");
+        go_to_field(&mut app, ConfigField::BaseUrl);
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "http://host:1");
+        assert_eq!(app.input.value(), "");
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay is open");
+        };
+        assert_eq!(form.url_input.value(), "http://host:1");
+        assert_eq!(form.key_input.value(), "");
+    }
+
+    #[test]
+    fn escape_while_editing_the_base_url_discards_it_and_keeps_the_modal_open() {
+        let mut app = app();
+        open_config_on(&mut app, "local");
+        go_to_field(&mut app, ConfigField::BaseUrl);
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "http://127.0.0.1:1234");
+        assert_eq!(update(&mut app, key(KeyCode::Esc)), None);
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay stays open");
+        };
+        assert_eq!(form.url_input.value(), "");
+        assert!(!form.editing_url);
+        assert_eq!(app.config.base_url_override("local"), None);
+    }
+
+    #[test]
+    fn tab_while_editing_text_does_not_move_off_the_field() {
+        struct Case {
+            name: &'static str,
+            engine: &'static str,
+            field: ConfigField,
+        }
+        let cases = [
+            Case {
+                name: "editing a key",
+                engine: "anthropic",
+                field: ConfigField::ApiKey,
+            },
+            Case {
+                name: "editing a base url",
+                engine: "local",
+                field: ConfigField::BaseUrl,
+            },
+        ];
+        for case in cases {
+            let mut app = app();
+            open_config_on(&mut app, case.engine);
+            go_to_field(&mut app, case.field);
+            update(&mut app, key(KeyCode::Enter));
+            let before = match &app.overlay {
+                Some(Overlay::Config(form)) => form.field_idx,
+                _ => panic!("config overlay is open"),
+            };
+            update(&mut app, key(KeyCode::Tab));
+            let Some(Overlay::Config(form)) = &app.overlay else {
+                panic!("config overlay is open");
+            };
+            assert_eq!(form.field_idx, before, "{}", case.name);
+            assert_eq!(form.field(&app.statuses), case.field, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn a_cli_engine_saves_straight_from_the_last_field() {
+        let mut app = app();
+        open_config_on(&mut app, "claude");
+        go_to_field(&mut app, ConfigField::MaxParallel);
+        assert_eq!(
+            update(&mut app, key(KeyCode::Enter)),
+            Some(Command::SaveConfig)
+        );
+        assert_eq!(app.overlay, None);
+        assert!(app.pending_keys.is_empty());
+    }
+
+    #[test]
+    fn walking_past_the_last_field_wraps_within_the_visible_ones() {
+        let mut app = app();
+        open_config_on(&mut app, "claude");
+        let count = visible_labels(&app).len();
+        for _ in 0..count {
+            update(&mut app, key(KeyCode::Down));
+        }
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay is open");
+        };
+        assert_eq!(form.field_idx, 0);
+        assert_eq!(form.field(&app.statuses), ConfigField::Language);
+    }
+
+    #[test]
+    fn saving_without_a_typed_key_never_asks_for_a_passphrase() {
+        let mut app = app();
+        open_config_on(&mut app, "anthropic");
+        go_to_field(&mut app, ConfigField::ApiKey);
+        update(&mut app, key(KeyCode::Enter));
+        assert_eq!(
+            update(&mut app, key(KeyCode::Enter)),
+            Some(Command::SaveConfig)
+        );
+        assert!(app.pending_keys.is_empty());
+    }
+
+    #[test]
+    fn a_cached_passphrase_skips_the_prompt_on_the_next_key() {
+        let mut app = app();
+        app.passphrase = Some(Passphrase::new("already unlocked"));
+        open_config_on(&mut app, "anthropic");
+        go_to_field(&mut app, ConfigField::ApiKey);
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "sk-ant-secret");
+        assert_eq!(
+            update(&mut app, key(KeyCode::Enter)),
+            Some(Command::UnlockVault {
+                passphrase: Passphrase::new("already unlocked"),
+            })
+        );
+        assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn tab_moves_between_the_passphrase_fields_and_back() {
+        let mut app = app();
+        app.overlay = Some(Overlay::Passphrase(PassphraseForm::new(true)));
+        typed(&mut app, "one");
+        update(&mut app, key(KeyCode::Tab));
+        typed(&mut app, "two");
+        update(&mut app, key(KeyCode::Tab));
+        typed(&mut app, "three");
+        let Some(Overlay::Passphrase(form)) = &app.overlay else {
+            panic!("passphrase overlay is open");
+        };
+        assert_eq!(form.input.value(), "onethree");
+        assert_eq!(form.confirm.value(), "two");
+        assert!(!form.on_confirm);
+    }
+
+    #[test]
+    fn the_passphrase_modal_confirms_a_new_vault_twice() {
+        let mut app = app();
+        app.overlay = Some(Overlay::Passphrase(PassphraseForm::new(true)));
+        typed(&mut app, "hunter2");
+        assert_eq!(update(&mut app, key(KeyCode::Enter)), None);
+        typed(&mut app, "hunter3");
+        assert_eq!(update(&mut app, key(KeyCode::Enter)), None);
+        let Some(Overlay::Passphrase(form)) = &app.overlay else {
+            panic!("passphrase overlay stays open");
+        };
+        assert_eq!(
+            form.error.as_deref(),
+            Some("the two passphrases do not match")
+        );
+    }
+
+    #[test]
+    fn a_matching_passphrase_unlocks_the_vault() {
+        let mut app = app();
+        app.overlay = Some(Overlay::Passphrase(PassphraseForm::new(true)));
+        typed(&mut app, "hunter2");
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "hunter2");
+        assert_eq!(
+            update(&mut app, key(KeyCode::Enter)),
+            Some(Command::UnlockVault {
+                passphrase: Passphrase::new("hunter2"),
+            })
+        );
+        assert_eq!(app.overlay, None);
+    }
+
+    #[test]
+    fn an_empty_passphrase_is_refused() {
+        let mut app = app();
+        app.overlay = Some(Overlay::Passphrase(PassphraseForm::new(false)));
+        assert_eq!(update(&mut app, key(KeyCode::Enter)), None);
+        let Some(Overlay::Passphrase(form)) = &app.overlay else {
+            panic!("passphrase overlay stays open");
+        };
+        assert_eq!(form.error.as_deref(), Some("passphrase must not be empty"));
+    }
+
+    #[test]
+    fn cancelling_the_passphrase_drops_the_stashed_key() {
+        let mut app = app();
+        open_config_on(&mut app, "anthropic");
+        go_to_field(&mut app, ConfigField::ApiKey);
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "sk-ant-secret");
+        update(&mut app, key(KeyCode::Enter));
+        assert!(matches!(app.overlay, Some(Overlay::Passphrase(_))));
+        assert_eq!(update(&mut app, key(KeyCode::Esc)), None);
+        assert_eq!(app.overlay, None);
+        assert!(app.pending_keys.is_empty());
+    }
+
+    #[test]
+    fn neither_the_form_nor_the_command_prints_the_secret() {
+        let mut app = app();
+        app.passphrase = Some(Passphrase::new("open sesame"));
+        open_config_on(&mut app, "anthropic");
+        go_to_field(&mut app, ConfigField::ApiKey);
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "sk-ant-secret");
+        let rendered = format!("{:?}", app.overlay);
+        assert!(!rendered.contains("sk-ant-secret"), "{rendered}");
+        let command = update(&mut app, key(KeyCode::Enter));
+        let rendered = format!("{command:?}");
+        assert!(!rendered.contains("open sesame"), "{rendered}");
+    }
+
+    fn visible_labels(app: &App) -> Vec<&'static str> {
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay is open");
+        };
+        form.visible_fields(&app.statuses)
+            .iter()
+            .map(|spec| spec.label)
+            .collect()
+    }
+
+    fn go_to_field(app: &mut App, field: ConfigField) {
+        let Some(Overlay::Config(form)) = &app.overlay else {
+            panic!("config overlay is open");
+        };
+        let fields = form.visible_fields(&app.statuses);
+        let target = fields
+            .iter()
+            .position(|spec| spec.field == field)
+            .expect("field is visible for the selected engine");
+        let current = form.field_idx % fields.len();
+        for _ in 0..(target + fields.len() - current) % fields.len() {
+            update(app, key(KeyCode::Down));
+        }
+    }
+
     #[test]
     fn config_modal_edits_and_saves_settings() {
         let mut app = app();
         update(&mut app, ctrl('o'));
         assert!(matches!(app.overlay, Some(Overlay::Config(_))));
         update(&mut app, key(KeyCode::Right));
-        update(&mut app, key(KeyCode::Down));
-        update(&mut app, key(KeyCode::Down));
-        update(&mut app, key(KeyCode::Down));
+        go_to_field(&mut app, ConfigField::ValidateLinks);
         update(&mut app, key(KeyCode::Right));
         let command = update(&mut app, key(KeyCode::Enter));
         assert_eq!(command, Some(Command::SaveConfig));
@@ -1430,17 +1984,13 @@ mod tests {
         let mut app = app();
         assert!(app.config.websearch.enabled);
         update(&mut app, ctrl('o'));
-        for _ in 0..4 {
-            update(&mut app, key(KeyCode::Down));
-        }
+        go_to_field(&mut app, ConfigField::WebSearch);
         update(&mut app, key(KeyCode::Right));
         let command = update(&mut app, key(KeyCode::Enter));
         assert_eq!(command, Some(Command::SaveConfig));
         assert!(!app.config.websearch.enabled);
         update(&mut app, ctrl('o'));
-        for _ in 0..4 {
-            update(&mut app, key(KeyCode::Down));
-        }
+        go_to_field(&mut app, ConfigField::WebSearch);
         update(&mut app, key(KeyCode::Left));
         update(&mut app, key(KeyCode::Enter));
         assert!(app.config.websearch.enabled);
@@ -1482,25 +2032,70 @@ mod tests {
         assert_eq!(form.model_idx, 0);
     }
 
-    #[test]
-    fn config_modal_engine_cycling_skips_unavailable_engines() {
-        let mut app = app();
-        app.overlay = Some(Overlay::Config(ConfigForm::from_state(
-            &app.config,
-            &app.statuses,
-        )));
-        update(&mut app, key(KeyCode::Down));
-        update(&mut app, key(KeyCode::Right));
+    fn selected_engine(app: &App) -> &'static str {
         let Some(Overlay::Config(form)) = &app.overlay else {
             panic!("config overlay open");
         };
-        assert_eq!(form.engine_idx, 1);
-        let mut app2 = app;
-        update(&mut app2, key(KeyCode::Right));
-        let Some(Overlay::Config(form)) = &app2.overlay else {
-            panic!("config overlay open");
-        };
-        assert_eq!(form.engine_idx, 0);
+        app.statuses[form.engine_idx].spec.name
+    }
+
+    #[test]
+    fn engine_cycling_reaches_every_engine_including_unconfigured_ones() {
+        let mut app = app();
+        update(&mut app, ctrl('o'));
+        update(&mut app, key(KeyCode::Down));
+        let mut seen = vec![selected_engine(&app)];
+        for _ in 1..app.statuses.len() {
+            update(&mut app, key(KeyCode::Right));
+            seen.push(selected_engine(&app));
+        }
+        for engine in ENGINES {
+            assert!(
+                seen.contains(&engine.name),
+                "{} must be reachable: {seen:?}",
+                engine.name
+            );
+        }
+        update(&mut app, key(KeyCode::Right));
+        assert_eq!(selected_engine(&app), "claude", "the list wraps around");
+    }
+
+    #[test]
+    fn cycling_backwards_from_the_first_engine_lands_on_the_last() {
+        let mut app = app();
+        update(&mut app, ctrl('o'));
+        update(&mut app, key(KeyCode::Down));
+        update(&mut app, key(KeyCode::Left));
+        let last = ENGINES.last().expect("the table is not empty").name;
+        assert_eq!(selected_engine(&app), last);
+    }
+
+    #[test]
+    fn an_unconfigured_api_engine_can_be_selected_and_given_a_key() {
+        let mut app = app();
+        update(&mut app, ctrl('o'));
+        update(&mut app, key(KeyCode::Down));
+        for _ in 0..app.statuses.len() {
+            if selected_engine(&app) == "openai" {
+                break;
+            }
+            update(&mut app, key(KeyCode::Right));
+        }
+        assert_eq!(selected_engine(&app), "openai");
+        assert!(
+            !app.statuses
+                .iter()
+                .any(|status| status.spec.name == "openai" && status.available),
+            "the regression only bites while openai is unavailable"
+        );
+        go_to_field(&mut app, ConfigField::ApiKey);
+        update(&mut app, key(KeyCode::Enter));
+        typed(&mut app, "sk-openai-secret");
+        update(&mut app, key(KeyCode::Enter));
+        assert_eq!(
+            app.pending_keys.get("openai").map(String::as_str),
+            Some("sk-openai-secret")
+        );
     }
 
     fn type_query(app: &mut App, text: &str) {

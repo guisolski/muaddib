@@ -16,18 +16,20 @@ use crate::core::export::osc52_payload;
 use crate::core::history::{push_recall, repeats_latest};
 use crate::core::mode::Mode;
 use crate::core::tree::ResearchTree;
-use crate::engines::cli::CliEngine;
-use crate::engines::{EngineSpec, EngineStatus, choose_engine};
+use crate::core::vault::Passphrase;
+use crate::engines::{
+    EngineStatus, choose_engine, detect_engines, engine_from_status, needs_unlock,
+    refresh_installed_models,
+};
 use crate::history_store;
 use crate::pipeline::SearchEvent;
 use crate::pipeline::search::{SearchRequest, spawn_search};
 use crate::tree_store;
-use crate::tui::app::{App, Screen};
+use crate::tui::app::{App, Overlay, PassphraseForm, Screen};
 use crate::tui::event::{AppEvent, Command};
 use crate::tui::update::update;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc::Receiver;
 
@@ -47,6 +49,7 @@ pub async fn run(
     session: Option<SessionStart>,
 ) -> anyhow::Result<()> {
     let mut app = App::new(config, statuses, initial_mode, fast);
+    app.vaulted = crate::vault_store::names();
     app.history = history_store::load_recall();
     app.clock_unix = unix_seconds();
     if let Some(session) = session {
@@ -106,7 +109,7 @@ async fn event_loop(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> a
             }
         };
         if let Some(command) = update(app, app_event)
-            && dispatch_command(app, command)
+            && dispatch_command(app, command).await
         {
             return Ok(());
         }
@@ -130,13 +133,14 @@ async fn next_search_event(events: Option<&mut Receiver<SearchEvent>>) -> Option
     }
 }
 
-fn dispatch_command(app: &mut App, command: Command) -> bool {
+async fn dispatch_command(app: &mut App, command: Command) -> bool {
     match command {
         Command::Quit => return true,
         Command::StartSearch { query } => start_search(app, &query),
         Command::CancelSearch => app.end_search(),
         Command::OpenUrl(url) => open_url(&url),
-        Command::SaveConfig => save_config(app),
+        Command::SaveConfig => save_config(app).await,
+        Command::UnlockVault { passphrase } => unlock_vault(app, &passphrase).await,
         Command::SaveSession => save_session(app),
         Command::CopyAnswer(markdown) => copy_answer(app, &markdown),
         Command::ExportAnswer { filename, contents } => export_answer(app, &filename, &contents),
@@ -220,11 +224,23 @@ fn unix_seconds() -> u64 {
 fn start_search(app: &mut App, query: &str) {
     match choose_engine(&app.statuses, &app.config.engine) {
         Err(error) => app.notice = Some(error.to_string()),
+        Ok((status, notice)) if needs_unlock(status) => {
+            app.notice = Some(format!(
+                "unlock the key vault to use '{}'",
+                status.spec.name
+            ));
+            drop(notice);
+            app.overlay = Some(Overlay::Passphrase(PassphraseForm::new(false)));
+        }
         Ok((status, notice)) => {
-            let Some(engine) = CliEngine::from_status(status) else {
+            let Some(engine) = engine_from_status(status, &app.config, app.fast, Some(&app.keys))
+            else {
+                app.notice = Some(format!(
+                    "engine '{}' could not be started",
+                    status.spec.name
+                ));
                 return;
             };
-            let engine = engine.with_model(search_model(&app.config, status.spec, app.fast));
             let context = app
                 .pending_parent
                 .map(|parent| context_for(&app.tree, parent))
@@ -241,16 +257,9 @@ fn start_search(app: &mut App, query: &str) {
             app.begin_search();
             app.notice = notice;
             record_history(app, query);
-            app.search.handle = Some(spawn_search(Arc::new(engine), request));
+            app.search.handle = Some(spawn_search(engine, request));
         }
     }
-}
-
-fn search_model(config: &Config, spec: &EngineSpec, fast: bool) -> Option<String> {
-    if fast && let Some(model) = config.fast_model_override(spec.name).or(spec.fast_model) {
-        return Some(model.to_string());
-    }
-    config.model_override(spec.name).map(str::to_string)
 }
 
 fn record_history(app: &mut App, query: &str) {
@@ -279,11 +288,49 @@ fn clear_history(app: &mut App) {
     }
 }
 
-fn save_config(app: &mut App) {
-    match config_store::save(&app.config) {
-        Ok(()) => app.notice = Some("config saved".to_string()),
-        Err(error) => app.notice = Some(format!("failed to save config: {error}")),
+async fn unlock_vault(app: &mut App, passphrase: &Passphrase) {
+    let mut entries = match crate::vault_store::unlock(passphrase.expose()) {
+        Ok(entries) => entries,
+        Err(error) => {
+            app.notice = Some(format!("vault: {error}"));
+            app.overlay = Some(Overlay::Passphrase(PassphraseForm::new(false)));
+            return;
+        }
+    };
+    let writing = !app.pending_keys.is_empty();
+    entries.extend(std::mem::take(&mut app.pending_keys));
+    if writing && let Err(error) = crate::vault_store::save(&entries, passphrase.expose()) {
+        app.notice = Some(format!("vault: {error}"));
+        return;
     }
+    app.vaulted = entries.keys().cloned().collect();
+    app.keys = entries;
+    app.passphrase = Some(passphrase.clone());
+    let stored = if writing {
+        "key stored in the encrypted vault"
+    } else {
+        "vault unlocked"
+    };
+    let failure = write_config(app);
+    redetect_engines(app).await;
+    app.notice = Some(failure.unwrap_or_else(|| stored.to_string()));
+}
+
+async fn save_config(app: &mut App) {
+    let failure = write_config(app);
+    redetect_engines(app).await;
+    app.notice = Some(failure.unwrap_or_else(|| "config saved".to_string()));
+}
+
+fn write_config(app: &App) -> Option<String> {
+    config_store::save(&app.config)
+        .err()
+        .map(|error| format!("failed to save config: {error}"))
+}
+
+async fn redetect_engines(app: &mut App) {
+    app.statuses = detect_engines(&app.config);
+    refresh_installed_models(&mut app.statuses).await;
 }
 
 fn open_url(url: &str) {

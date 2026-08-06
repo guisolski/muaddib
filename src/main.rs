@@ -3,8 +3,11 @@ use muaddib::config_store;
 use muaddib::core::config::Config;
 use muaddib::core::cost::{EngineUsage, usage_label};
 use muaddib::core::mode::Mode;
-use muaddib::engines::cli::CliEngine;
-use muaddib::engines::{EngineSpec, EngineStatus, choose_engine, detect_engines};
+use muaddib::core::vault::Passphrase;
+use muaddib::engines::{
+    Engine, EngineStatus, choose_engine, detect_engines, engine_from_status, needs_unlock,
+    refresh_installed_models,
+};
 use muaddib::history_store;
 use muaddib::pipeline::search::{SearchRequest, spawn_search};
 use muaddib::pipeline::{LinkStatus, SearchEvent};
@@ -68,7 +71,9 @@ async fn main() -> ExitCode {
     if let Some(notice) = config_notice {
         eprintln!("muaddib: {notice}");
     }
-    let statuses = detect_engines(&config);
+    let mut statuses = detect_engines(&config);
+    refresh_installed_models(&mut statuses).await;
+    let statuses = statuses;
     if cli.print {
         run_headless(&cli, &config, &statuses).await
     } else {
@@ -149,23 +154,80 @@ async fn run_headless(cli: &Cli, config: &Config, statuses: &[EngineStatus]) -> 
     if let Some(notice) = engine_notice {
         eprintln!("muaddib: {notice}");
     }
-    let engine = CliEngine::from_status(status)
-        .expect("an available engine has a resolved path")
-        .with_model(headless_model(config, status.spec, cli.fast));
+    let unlocked = unlock_for_headless(status);
+    let Some(engine) = engine_from_status(status, config, cli.fast, unlocked.as_ref()) else {
+        eprintln!(
+            "muaddib: engine '{}' could not be started",
+            status.spec.name
+        );
+        return ExitCode::FAILURE;
+    };
     let mode = cli.mode.unwrap_or(Mode::General);
     let request = SearchRequest {
         fetch_images: false,
         ..SearchRequest::from_config(query.clone(), mode, cli.fast, config)
     };
     record_history(&query, mode, cli.fast);
-    stream_search_to_stdio(Arc::new(engine), request).await
+    stream_search_to_stdio(engine, request).await
 }
 
-fn headless_model(config: &Config, spec: &EngineSpec, fast: bool) -> Option<String> {
-    if fast && let Some(model) = config.fast_model_override(spec.name).or(spec.fast_model) {
-        return Some(model.to_string());
+fn unlock_for_headless(
+    status: &EngineStatus,
+) -> Option<std::collections::BTreeMap<String, String>> {
+    if !needs_unlock(status) {
+        return None;
     }
-    config.model_override(spec.name).map(str::to_string)
+    let passphrase = read_passphrase(&format!(
+        "passphrase for the muaddib key vault ({}): ",
+        status.spec.name
+    ))?;
+    match muaddib::vault_store::unlock(passphrase.expose()) {
+        Ok(entries) => Some(entries),
+        Err(error) => {
+            eprintln!("muaddib: {error}");
+            None
+        }
+    }
+}
+
+fn read_passphrase(prompt: &str) -> Option<Passphrase> {
+    use std::io::Write;
+    if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+        eprintln!("muaddib: no terminal to read a vault passphrase from");
+        return None;
+    }
+    eprint!("{prompt}");
+    let _ = std::io::stderr().flush();
+    let raw = crossterm::terminal::enable_raw_mode().is_ok();
+    let typed = read_secret_line();
+    if raw {
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+    eprintln!();
+    typed.filter(|value| !value.is_empty()).map(Passphrase::new)
+}
+
+fn read_secret_line() -> Option<String> {
+    use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers, read};
+    let mut typed = String::new();
+    loop {
+        let Ok(Event::Key(key)) = read() else {
+            return None;
+        };
+        if key.kind != KeyEventKind::Press {
+            continue;
+        }
+        match key.code {
+            KeyCode::Enter => return Some(typed),
+            KeyCode::Esc => return None,
+            KeyCode::Backspace => {
+                typed.pop();
+            }
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return None,
+            KeyCode::Char(character) => typed.push(character),
+            _ => {}
+        }
+    }
 }
 
 fn record_history(query: &str, mode: Mode, fast: bool) {
@@ -176,13 +238,13 @@ fn record_history(query: &str, mode: Mode, fast: bool) {
 }
 
 fn report_missing_engines(statuses: &[EngineStatus]) {
-    eprintln!("muaddib: no supported engine CLI is installed. Install one of:");
+    eprintln!("muaddib: no engine is available. Set one up:");
     for status in statuses {
         eprintln!("  {:<14} {}", status.spec.name, status.spec.install_hint);
     }
 }
 
-async fn stream_search_to_stdio(engine: Arc<CliEngine>, request: SearchRequest) -> ExitCode {
+async fn stream_search_to_stdio(engine: Arc<dyn Engine>, request: SearchRequest) -> ExitCode {
     let mut handle = spawn_search(engine, request);
     let mut answer: Option<Box<muaddib::core::answer::Answer>> = None;
     let mut failure = None;

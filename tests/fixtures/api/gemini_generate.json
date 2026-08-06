@@ -1,0 +1,19 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "role": "model",
+        "parts": [
+          { "text": "{\"summary\":" },
+          { "text": "\"gemini payload\"}" }
+        ]
+      },
+      "finishReason": "STOP"
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 88,
+    "candidatesTokenCount": 21,
+    "totalTokenCount": 109
+  }
+}

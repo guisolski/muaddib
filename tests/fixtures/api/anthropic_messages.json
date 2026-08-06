@@ -1,0 +1,17 @@
+{
+  "id": "msg_fixture",
+  "type": "message",
+  "role": "assistant",
+  "model": "claude-sonnet-5",
+  "content": [
+    { "type": "thinking", "thinking": "" },
+    { "type": "text", "text": "{\"summary\":\"anthropic payload\"}" }
+  ],
+  "stop_reason": "end_turn",
+  "usage": {
+    "input_tokens": 100,
+    "cache_creation_input_tokens": 40,
+    "cache_read_input_tokens": 1000,
+    "output_tokens": 64
+  }
+}

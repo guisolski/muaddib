@@ -60,6 +60,16 @@ arguments for the task markers that the prompt builders embed (`MUADDIB:EXPAND`,
 `FakeEngine` (in `pipeline/search.rs` tests) covers the same protocol without
 subprocess overhead.
 
+The API engines get the same treatment without a mocking crate (ADR-0005): a real
+`tokio::net::TcpListener` on `127.0.0.1:0` serves canned responses, so retry, timeout,
+and error handling are exercised over an actual socket. The pure wire layer is tested
+against captured provider bodies in `tests/fixtures/api/` — including an Anthropic
+response that leads with a `thinking` block and one with `stop_reason: "refusal"`.
+
+The vault's crypto is unit-testable because `core/vault.rs::seal` takes the salt and
+nonce as arguments; tests seal with cheap Argon2 parameters (`m_cost: 64`) since `open`
+reads the parameters back out of the file header. Production uses the OWASP floor.
+
 Test layers:
 
 | Layer | Where | Covers |

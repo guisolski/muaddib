@@ -1,11 +1,27 @@
 # Engines
 
-muaddib does not talk to model APIs. It drives locally installed AI CLIs as
-subprocesses, reusing their authentication and their built-in web access.
+muaddib reaches a model over one of two **transports**: a locally installed AI CLI
+driven as a subprocess (reusing its authentication and built-in web access), or
+direct HTTP to a model API. The CLI transport is the default and came first; see
+[ADR-0017](adr/0017-direct-model-apis.md) for why the second one exists.
 
 ## The engine table
 
-Every engine is one row in `ENGINES` (`src/engines/mod.rs`):
+Every engine is one row in `ENGINES` (`src/core/engine.rs`). The row's `transport`
+field selects which of the two half-specs applies:
+
+```rust
+pub enum Transport {
+    Cli(&'static CliSpec),
+    Api(&'static ApiSpec),
+}
+```
+
+Everything outside `src/engines/` — the TUI, `main.rs`, the config layer — reads only
+the transport-agnostic fields (`name`, `models`, `install_hint`, `prices`), so adding
+the API transport did not spread `match` arms through the codebase.
+
+### CLI rows
 
 | name | binary | argv (before the prompt) | streams | parse strategy | JSON schema | fast model |
 |---|---|---|---|---|---|---|
@@ -35,6 +51,85 @@ ships one, because it is the only engine whose model lineup has an unambiguous
 > and would otherwise swallow the trailing prompt argument (found the hard way,
 > during the live checkpoint).
 
+### API rows
+
+| name | wire | endpoint | auth header | probes models | auto-selected |
+|---|---|---|---|---|---|
+| `ollama` | `OllamaChat` | `$OLLAMA_HOST` or `http://localhost:11434` | — | ✓ `/api/tags` | ✓ |
+| `local` | `OpenAiChat` | `$MUADDIB_LOCAL_BASE_URL` | optional bearer | ✓ `/v1/models` | ✓ |
+| `openai` | `OpenAiChat` | `https://api.openai.com` | `authorization: Bearer` | — | **✗** |
+| `anthropic` | `AnthropicMessages` | `https://api.anthropic.com` | `x-api-key` | — | **✗** |
+| `gemini` | `GeminiGenerate` | `https://generativelanguage.googleapis.com` | `x-goog-api-key` | — | **✗** |
+
+Every endpoint above is a default. `[engines.<name>] base_url` overrides it and wins
+over the environment variable, which is how you point `local` at LM Studio, llama.cpp,
+vLLM, or an OpenRouter-style gateway — and equally how you route `openai` or
+`anthropic` through a proxy. The config modal's **base url** field writes that key.
+
+The wire formats are pure functions in `src/core/api.rs` — request bodies, text and
+usage extraction, headers, endpoints, retry decisions — dispatched from the `Wire`
+enum. `src/engines/api.rs` owns only the HTTP.
+
+Three details that are not obvious from the table:
+
+- **`auto_select` is false for the billed rows.** `choose_engine` falls back to the
+  first available engine when the requested one is missing; without this column, a
+  stray `OPENAI_API_KEY` would silently start billing you the first time `claude` was
+  not on `PATH`. Billed engines are reachable only by explicit request.
+- **Anthropic requires `max_tokens`**, so its row carries `default_max_tokens`; the
+  others send none unless configured. Its `content[]` may lead with `thinking` blocks,
+  so extraction filters on `type == "text"` rather than taking `content[0]`, and
+  `stop_reason: "refusal"` is mapped to an error instead of a blank answer.
+- **Gemini takes the key in a header**, never the query string, so it cannot land in a
+  log or an error URL. Its model goes in the URL path, not the body.
+
+### Availability
+
+CLI rows are available when the binary resolves on `PATH` (or `[engines.<name>] bin`
+points at an executable). API rows are available when an endpoint resolves *and* either
+the engine is keyless, or a key is found, or the encrypted vault holds one for it.
+
+`ollama` and `local` are probed live: a `GET /api/tags` with a 1s budget both decides
+availability and fills `EngineStatus.models`, which is what the config modal's model
+picker reads. That is why the picker offers the models you actually pulled instead of a
+hardcoded list.
+
+The probe runs at startup and again after every config save and vault unlock, so
+starting `ollama serve` and then setting a base url in the modal is enough — no
+restart. Availability never gates the config modal's engine row: an engine that is
+not ready is still selectable, showing why next to its name (`ollama (not running)`,
+`openai (no key)`), because otherwise the engines that need configuring would be
+exactly the ones you could not reach in order to configure them.
+
+### Keys
+
+Resolution order, first match wins:
+
+1. `[engines.<name>] api_key_env` — a variable name you choose
+2. the row's own `key_env` (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, then
+   `GEMINI_API_KEY` / `GOOGLE_API_KEY`)
+3. the encrypted vault, which needs the session passphrase
+
+Step 2 is what keeps `--print` and CI zero-config. Keys never reach `config.toml`; see
+[configuration.md](configuration.md#the-key-vault).
+
+### Structured output
+
+Every API row ships `SchemaMode::JsonObject` — the provider's "must emit valid JSON"
+flag — while the answer *shape* goes through the prompt-inline path. `ANSWER_SCHEMA`
+uses `$ref`/`definitions`, `oneOf`, and `minimum`, which every provider's native mode
+rejects in some form. `SchemaMode::NativeSchema` is implemented and tested for all four
+wires, and a table invariant test asserts no row uses it yet, so promoting a provider
+is a deliberate one-row edit rather than an accident.
+
+### Retry
+
+429 and 5xx are retried up to `MAX_ATTEMPTS`, honouring `Retry-After`. The decision is
+pure (`core::api::retry_delay`); the adapter only sleeps. The retry loop sits *inside*
+`tokio::time::timeout(job.timeout, ..)`, so retries share one budget instead of
+multiplying it. This matters because fan-out fires up to `max_parallel` concurrent
+requests — without it, sub-queries would silently drop to empty on the first rate limit.
+
 ## Streaming
 
 The `streams` column says whether stdout arrives as a line stream muaddib can
@@ -59,7 +154,7 @@ was built; see ADR-0015).
 
 ## Output parsing: two tolerant layers
 
-1. **Envelope layer** (`engines/parse.rs`), per strategy:
+1. **Envelope layer** (`core/engine.rs`), per strategy:
    - `ClaudeJson` — parses the `{"type":"result", ...}` envelope; prefers
      `structured_output` (populated by `--json-schema`), falls back to the
      `result` string; surfaces `is_error: true` as `EngineError::Reported`.
@@ -96,7 +191,7 @@ install hint.
 
 1. Add one row to `ENGINES` with the argv and the closest parse strategy.
 2. If the CLI has a custom envelope, add a fixture under `tests/fixtures/` and a
-   case in `engines/parse.rs` tests.
+   case in `core/engine.rs` tests.
 3. Done. Detection, the config modal, selection fallback, and the pipeline all
    read the table.
 

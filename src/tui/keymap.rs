@@ -9,6 +9,7 @@ pub enum Scope {
     Tree,
     FollowUp,
     Modal,
+    Entry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -389,6 +390,20 @@ pub const KEYMAP: &[KeyBinding] = &[
         KeyModifiers::NONE,
         Action::ValuePrev,
         "previous value",
+    ),
+    bind(
+        Scope::Entry,
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        Action::Confirm,
+        "confirm",
+    ),
+    bind(
+        Scope::Entry,
+        KeyCode::Tab,
+        KeyModifiers::NONE,
+        Action::FieldNext,
+        "next field",
     ),
     bind(
         Scope::Modal,

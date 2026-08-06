@@ -10,11 +10,12 @@ terminal.
 flowchart TB
     subgraph adapters [Adapters — I/O at the edges]
         TUI[tui/ — ratatui event loop and views]
-        ENG[engines/ — CLI subprocess execution, line streaming]
+        ENG[engines/ — CLI subprocesses and model-API HTTP]
         VAL[pipeline/validate — HTTP link checks]
         WEB[pipeline/websearch — HTTP search grounding]
         PAGES[pipeline/pages — HTTP page-content grounding]
         CFG[config_store — filesystem]
+        VAULT[vault_store — encrypted key file]
         TREES[tree_store — session files]
     end
     subgraph orchestration [Orchestration]
@@ -37,6 +38,9 @@ flowchart TB
         TREE[core/tree — research tree and sessions]
         CTX[core/context — follow-up context]
         CONF[core/config — parse and clamp]
+        API[core/api — model wire formats]
+        SEAL[core/vault — seal, open, mask]
+        COST[core/cost — usage and prices]
     end
     TUI --> PIPE
     PIPE --> ENG
@@ -51,6 +55,9 @@ flowchart TB
     WEB --> RANK
     PAGES --> READ
     CFG --> CONF
+    VAULT --> SEAL
+    ENG --> API
+    ENG --> COST
     TREES --> TREE
 ```
 
@@ -58,9 +65,15 @@ flowchart TB
 
 - `src/core/` imports neither `tokio` nor `ratatui` nor performs any I/O. Every
   function is deterministic: same inputs, same outputs.
-- Adapters are thin. `engines/cli.rs` spawns processes; `pipeline/validate.rs`
-  makes HTTP requests; `tui/` draws. Each delegates every decision to core
-  functions.
+- Adapters are thin. `engines/cli.rs` spawns processes; `engines/api.rs` makes model
+  HTTP requests; `pipeline/validate.rs` checks links; `tui/` draws. Each delegates
+  every decision to core functions.
+- Cryptography follows the same split. `core/vault.rs::seal` takes the salt and nonce
+  as **arguments** rather than generating them, so `open` is fully deterministic and
+  the round-trip, wrong-passphrase, and tampered-header cases are ordinary unit tests.
+  `vault_store.rs` owns the randomness and the file I/O. Because the release profile
+  sets `panic = "abort"`, every vault operation returns `Result` and none of them
+  `unwrap`.
 - The TUI reducer (`tui/update.rs`) is a pure state machine: it receives an
   `AppEvent`, mutates `App`, and returns an optional `Command`. All side effects
   (spawning searches, opening URLs, saving config) are executed by the event loop
@@ -74,18 +87,20 @@ logic needs to be touched:
 | Table | Location | Drives |
 |---|---|---|
 | `MODES` | `core/mode.rs` | search modes, breadth, prompt instructions, reflection rounds |
-| `ENGINES` | `core/engine.rs` | engine binaries, argv, streaming, parse strategy |
+| `ENGINES` | `core/engine.rs` | engine transport, argv or wire format, models, prices |
+| `Wire` dispatch | `core/api.rs` | per-provider request bodies, text and usage extraction |
+| `ModelPrice` rows | `core/engine.rs` | per-million input/output pricing, longest-prefix matched |
 | `STREAM_TOOLS` | `core/stream.rs` | engine tool calls narrated as activity |
 | `WEB_ENGINES` | `core/websearch.rs` | web/academic search engines, request shape, hit parsers |
 | `CONTENT_SELECTORS` / `NOISE_TAGS` | `core/readability.rs` | page-content extraction roots and excluded subtrees |
 | `EXTRACTORS` | `core/extract.rs` | JSON extraction strategies, tried in order |
 | `KEYMAP` | `tui/keymap.rs` | keybindings, and the Ctrl+G help screen |
-| `CONFIG_FIELDS` | `tui/app.rs` | config modal fields |
+| `CONFIG_FIELDS` | `tui/app.rs` | config modal fields, each with the `FieldVisibility` that decides whether the selected engine shows it |
 | `CLIPBOARD_COMMANDS` | `tui/mod.rs` | clipboard binaries tried before OSC 52 |
 | `SOURCE_CLASSES` / `DOMAIN_RULES` | `core/credibility.rs` | source credibility classes and the hosts that map to them |
 | `FRAMES` | `tui/widgets/spinner.rs` | spinner animation |
 | `SLEEPING` / `WORM` | `tui/widgets/mascot.rs` | mascot frames: sleeping breath, hop, Shai-Hulud pass |
-| `GENERIC_TEXT_KEYS` | `engines/parse.rs` | envelope key probing |
+| `GENERIC_TEXT_KEYS` | `core/engine.rs` | envelope key probing |
 | fallback facet tables | `core/plan.rs` | offline query expansion |
 
 ## Data flow of one search

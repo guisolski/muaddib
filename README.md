@@ -56,10 +56,14 @@ passes through.
 - **Every claim is cited.** The answer is a structured document where each paragraph,
   list item, table, and chart references numbered sources. URLs that don't come from
   the actual searches are ejected, and every link is health-checked (HTTP HEAD) live.
-- **No API keys.** muaddib drives the AI CLIs you already use — `claude`, `cursor-agent`,
-  `codex`, `opencode` — as subprocesses, reusing their auth and their built-in web
-  search. The built-in web-search grounding is keyless too: it only uses open
-  endpoints and public APIs.
+- **No API keys required.** muaddib drives the AI CLIs you already use — `claude`,
+  `cursor-agent`, `codex`, `opencode` — as subprocesses, reusing their auth and their
+  built-in web search. The built-in web-search grounding is keyless too: it only uses
+  open endpoints and public APIs. If you'd rather call a model directly, muaddib also
+  speaks HTTP to OpenAI, Anthropic, Gemini, Ollama, and any OpenAI-compatible
+  endpoint — see [Direct model APIs](#direct-model-apis).
+- **Local models are first class.** Point muaddib at a running `ollama` and it finds
+  the models you have actually pulled — no key, no account, nothing leaves the machine.
 - **Grounded in real indexes.** Before the AI fans out, each sub-query also runs
   against conventional search engines (DuckDuckGo, Bing, Mojeek) and — in
   Scientific mode — scholarly APIs (OpenAlex, Crossref, Semantic Scholar). The
@@ -118,7 +122,8 @@ passes through.
   travels with the source, so exports, `--print` JSON, and reopened sessions keep it
 - Export the answer as Markdown: `y` copies it, `e` writes it to a file. Diagrams
   become mermaid blocks that GitHub and Obsidian render natively
-- Config modal (`Ctrl+O`): answer language, engine, model, link validation, parallelism
+- Config modal (`Ctrl+O`): answer language, engine, model, link validation, parallelism —
+  plus an api key and base url field that appear only for the engines that use them
 - Headless mode (`--print`) that emits the answer as JSON for scripting
 - Answer language follows your config (default: `pt-BR`) — search in any language,
   read in yours
@@ -135,8 +140,22 @@ passes through.
 | Codex CLI | `codex` | model-dependent | prompt-enforced | `npm install -g @openai/codex` |
 | opencode | `opencode` | model-dependent | prompt-enforced | `npm install -g opencode-ai` |
 
-Engines that are not installed appear greyed out in the config modal; muaddib falls back
-to the first available engine automatically.
+Or, instead of a CLI, a direct HTTP endpoint:
+
+| Engine | Endpoint | Auth | Notes |
+|---|---|---|---|
+| `ollama` | `http://localhost:11434` | none | probed live; the picker lists the models you pulled |
+| `local` | `$MUADDIB_LOCAL_BASE_URL` | optional | any OpenAI-compatible server: LM Studio, llama.cpp, vLLM |
+| `openai` | `https://api.openai.com` | `$OPENAI_API_KEY` | billed |
+| `anthropic` | `https://api.anthropic.com` | `$ANTHROPIC_API_KEY` | billed |
+| `gemini` | `https://generativelanguage.googleapis.com` | `$GEMINI_API_KEY` | billed |
+
+Every engine is selectable in the config modal, ready or not — one that is not shows why
+next to its name (`ollama (not running)`, `openai (no key)`), so you can select it and
+fill in what it is missing. muaddib falls back to the first available engine when you
+search with one that is not ready. Billed engines are **never** chosen by that fallback —
+you have to name them explicitly with `--engine` or in the config — so a stray
+`OPENAI_API_KEY` in your shell can never start spending money on its own.
 
 ## Install
 
@@ -279,6 +298,44 @@ bin = "/custom/path/claude" # binary path
 model = "sonnet"            # model passed to the CLI (any value it accepts)
 fast_model = "haiku"        # model used in fast mode
 ```
+
+### Direct model APIs
+
+Nothing extra is needed for a local model:
+
+```sh
+ollama serve && ollama pull qwen3:8b
+muaddib --engine ollama --print "what is a sandworm"
+```
+
+For a hosted provider, muaddib reads the usual environment variable
+(`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` / `GOOGLE_API_KEY`), which keeps
+headless and CI use zero-config. Otherwise, press `Ctrl-O`, select the engine, and type
+the key into the **api key** field: it is sealed into an encrypted vault, never into
+`config.toml`.
+
+```toml
+[engines.anthropic]
+base_url = "https://api.anthropic.com"   # override the endpoint
+api_key_env = "WORK_ANTHROPIC_KEY"       # read a different variable
+max_tokens = 16384
+```
+
+### The key vault
+
+Keys typed into the config modal are stored in
+`~/.local/state/muaddib/keys.enc` (or `$XDG_STATE_HOME/muaddib/keys.enc`, or
+`$MUADDIB_KEYS`), mode `0600`, written by temp-file-and-rename:
+
+- **Argon2id** (19456 KiB, t=2, p=1) derives a key from your passphrase
+- **XChaCha20-Poly1305** seals the key material, with the whole file header as
+  associated data — so the KDF parameters cannot be downgraded undetected
+- The header carries a plaintext list of *which engines* have a key, so startup can show
+  availability without asking for the passphrase. It never carries key material.
+- The passphrase is asked for once per session and held only in memory
+
+`config.toml` never contains key material. This matters because muaddib rewrites that
+whole file every time you save from the TUI.
 
 Search history lives separately, under the XDG *state* dir:
 `~/.local/state/muaddib/history.jsonl` (or `$XDG_STATE_HOME/muaddib/history.jsonl`, or

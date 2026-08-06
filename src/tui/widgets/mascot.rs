@@ -251,9 +251,12 @@ mod tests {
         let statuses: Vec<EngineStatus> = ENGINES
             .iter()
             .map(|spec| EngineStatus {
+                key_from_env: false,
                 spec,
                 available: true,
                 path: Some(PathBuf::from("/fake/bin")),
+                endpoint: None,
+                models: spec.models.iter().map(ToString::to_string).collect(),
             })
             .collect();
         App::new(Config::default(), statuses, None, false)

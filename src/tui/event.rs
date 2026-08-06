@@ -1,3 +1,4 @@
+use crate::core::vault::Passphrase;
 use crate::pipeline::SearchEvent;
 use crossterm::event::KeyEvent;
 
@@ -15,6 +16,7 @@ pub enum Command {
     CancelSearch,
     OpenUrl(String),
     SaveConfig,
+    UnlockVault { passphrase: Passphrase },
     SaveSession,
     CopyAnswer(String),
     ExportAnswer { filename: String, contents: String },

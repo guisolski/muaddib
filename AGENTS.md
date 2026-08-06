@@ -11,12 +11,13 @@ and [`docs/architecture.md`](docs/architecture.md) for the full design.
 ```
 src/
 ├── core/       pure — zero I/O, no tokio, no ratatui (mode, plan, prompts,
-│               extract, answer, citations, config, history, engine, websearch)
-├── engines/    AI CLI subprocess adapters (spawn, bin resolution)
+│               extract, answer, citations, config, history, engine, api,
+│               vault, cost, websearch)
+├── engines/    engine adapters: CLI subprocesses (cli.rs) and model HTTP (api.rs)
 ├── pipeline/   async orchestration: web-search grounding, fan-out, merge,
 │               link validation
 ├── tui/        ratatui event loop, reducer, views, widgets
-├── config_store.rs / history_store.rs   filesystem adapters
+├── config_store.rs / history_store.rs / vault_store.rs   filesystem adapters
 ```
 
 Hexagonal: `core/` holds the decisions, everything else is a thin adapter
@@ -101,8 +102,16 @@ Mutation runs are scoped to the diff and **block** the push and the PR. If one
 survives, the fix is the missing assertion, not an exclusion — see
 [`docs/adr/0016-mutation-testing.md`](docs/adr/0016-mutation-testing.md).
 
-Tests never call a real AI CLI — `tests/fixtures/fake-engine.sh` answers
-with fixture JSON keyed on the prompt's task marker.
+Tests never call a real AI CLI or a real model API. `tests/fixtures/fake-engine.sh`
+answers with fixture JSON keyed on the prompt's task marker; the API engines are tested
+against a loopback `TcpListener` serving canned bodies, and the wire formats against
+captured fixtures in `tests/fixtures/api/`. Per ADR-0005 there is no mocking crate —
+doubles are hand-rolled.
+
+Secrets carry masked `Debug` and neither `Display` nor `Serialize`: `ApiKey` prints
+`ApiKey(***)`, `Passphrase` prints `Passphrase(***)`. Never add a field that could carry
+key material to `Config` — `config_store::save` rewrites that whole file, world-readable,
+on every TUI save. Keys go in the vault (`core/vault.rs` + `vault_store.rs`).
 
 ## Further reading
 

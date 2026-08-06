@@ -17,7 +17,8 @@ fn fixture_path(name: &str) -> PathBuf {
 
 fn fake_engine(script: &str) -> Arc<CliEngine> {
     let spec = engine_by_name("claude").expect("claude spec exists");
-    Arc::new(CliEngine::new(spec, fixture_path(script)))
+    let cli = spec.cli().expect("claude is a cli engine");
+    Arc::new(CliEngine::new(spec, cli, fixture_path(script)))
 }
 
 fn request() -> SearchRequest {

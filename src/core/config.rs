@@ -80,11 +80,19 @@ pub struct EngineOverride {
     pub bin: Option<PathBuf>,
     pub model: Option<String>,
     pub fast_model: Option<String>,
+    pub base_url: Option<String>,
+    pub api_key_env: Option<String>,
+    pub max_tokens: Option<u32>,
 }
 
 impl EngineOverride {
     fn is_empty(&self) -> bool {
-        self.bin.is_none() && self.model.is_none() && self.fast_model.is_none()
+        self.bin.is_none()
+            && self.model.is_none()
+            && self.fast_model.is_none()
+            && self.base_url.is_none()
+            && self.api_key_env.is_none()
+            && self.max_tokens.is_none()
     }
 }
 
@@ -125,9 +133,35 @@ impl Config {
             .and_then(|entry| entry.fast_model.as_deref())
     }
 
+    pub fn base_url_override(&self, engine_name: &str) -> Option<&str> {
+        self.engines
+            .get(engine_name)
+            .and_then(|entry| entry.base_url.as_deref())
+    }
+
+    pub fn api_key_env_override(&self, engine_name: &str) -> Option<&str> {
+        self.engines
+            .get(engine_name)
+            .and_then(|entry| entry.api_key_env.as_deref())
+    }
+
+    pub fn max_tokens_override(&self, engine_name: &str) -> Option<u32> {
+        self.engines
+            .get(engine_name)
+            .and_then(|entry| entry.max_tokens)
+    }
+
     pub fn set_model_override(&mut self, engine_name: &str, model: Option<String>) {
         let entry = self.engines.entry(engine_name.to_string()).or_default();
         entry.model = model;
+        if entry.is_empty() {
+            self.engines.remove(engine_name);
+        }
+    }
+
+    pub fn set_base_url_override(&mut self, engine_name: &str, base_url: Option<String>) {
+        let entry = self.engines.entry(engine_name.to_string()).or_default();
+        entry.base_url = base_url;
         if entry.is_empty() {
             self.engines.remove(engine_name);
         }
@@ -512,6 +546,54 @@ mod tests {
     }
 
     #[test]
+    fn engine_api_overrides_round_trip() {
+        let text = concat!(
+            "[engines.anthropic]\n",
+            "base_url = \"https://proxy.example\"\n",
+            "api_key_env = \"WORK_ANTHROPIC_KEY\"\n",
+            "max_tokens = 8192\n",
+        );
+        let config = parse_config(text).unwrap();
+        assert_eq!(
+            config.base_url_override("anthropic"),
+            Some("https://proxy.example")
+        );
+        assert_eq!(
+            config.api_key_env_override("anthropic"),
+            Some("WORK_ANTHROPIC_KEY")
+        );
+        assert_eq!(config.max_tokens_override("anthropic"), Some(8192));
+        assert_eq!(config.base_url_override("openai"), None);
+        assert_eq!(config.api_key_env_override("openai"), None);
+        assert_eq!(config.max_tokens_override("openai"), None);
+    }
+
+    #[test]
+    fn an_engine_block_without_api_keys_reports_no_api_overrides() {
+        let config = parse_config("[engines.anthropic]\nmodel = \"claude-opus-5\"").unwrap();
+        assert_eq!(config.base_url_override("anthropic"), None);
+        assert_eq!(config.api_key_env_override("anthropic"), None);
+        assert_eq!(config.max_tokens_override("anthropic"), None);
+    }
+
+    #[test]
+    fn no_config_key_can_carry_an_api_key() {
+        let text = concat!(
+            "[engines.anthropic]\n",
+            "api_key = \"sk-ant-donotleak\"\n",
+            "key = \"sk-ant-donotleak\"\n",
+            "api_key_env = \"WORK_ANTHROPIC_KEY\"\n",
+        );
+        let config = parse_config(text).unwrap();
+        let rendered = to_toml(&config);
+        assert!(!rendered.contains("sk-ant-donotleak"), "{rendered}");
+        assert_eq!(
+            config.api_key_env_override("anthropic"),
+            Some("WORK_ANTHROPIC_KEY")
+        );
+    }
+
+    #[test]
     fn set_model_override_adds_updates_and_removes_entries() {
         struct Case {
             name: &'static str,
@@ -560,6 +642,70 @@ mod tests {
     }
 
     #[test]
+    fn set_base_url_override_adds_updates_and_removes_entries() {
+        struct Case {
+            name: &'static str,
+            initial: Option<&'static str>,
+            set: Option<&'static str>,
+            want: Option<&'static str>,
+            want_entry: bool,
+        }
+        let cases = [
+            Case {
+                name: "set on empty config",
+                initial: None,
+                set: Some("http://127.0.0.1:1234"),
+                want: Some("http://127.0.0.1:1234"),
+                want_entry: true,
+            },
+            Case {
+                name: "replace existing base url",
+                initial: Some("http://127.0.0.1:1234"),
+                set: Some("http://127.0.0.1:8080"),
+                want: Some("http://127.0.0.1:8080"),
+                want_entry: true,
+            },
+            Case {
+                name: "clearing removes the empty entry",
+                initial: Some("http://127.0.0.1:1234"),
+                set: None,
+                want: None,
+                want_entry: false,
+            },
+        ];
+        for case in cases {
+            let mut config = Config::default();
+            if let Some(base_url) = case.initial {
+                config.set_base_url_override("local", Some(base_url.to_string()));
+            }
+            config.set_base_url_override("local", case.set.map(String::from));
+            assert_eq!(
+                config.base_url_override("local"),
+                case.want,
+                "{}",
+                case.name
+            );
+            assert_eq!(
+                config.engines.contains_key("local"),
+                case.want_entry,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_base_url_override_survives_a_toml_round_trip() {
+        let mut config = Config::default();
+        config.set_base_url_override("local", Some("http://127.0.0.1:1234".to_string()));
+        let parsed = parse_config(&to_toml(&config)).expect("the config parses back");
+        assert_eq!(
+            parsed.base_url_override("local"),
+            Some("http://127.0.0.1:1234")
+        );
+    }
+
+    #[test]
     fn clearing_the_model_keeps_a_bin_override_entry() {
         let mut config = parse_config("[engines.claude]\nbin = \"/x\"\nmodel = \"opus\"").unwrap();
         config.set_model_override("claude", None);
@@ -588,6 +734,9 @@ mod tests {
                     bin: Some(PathBuf::from("/tmp/fake")),
                     model: Some("sonnet".to_string()),
                     fast_model: Some("haiku".to_string()),
+                    base_url: None,
+                    api_key_env: None,
+                    max_tokens: None,
                 },
             )]),
             ..Config::default()

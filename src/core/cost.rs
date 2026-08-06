@@ -32,6 +32,29 @@ impl EngineUsage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModelPrice {
+    pub prefix: &'static str,
+    pub input_per_million: f64,
+    pub output_per_million: f64,
+}
+
+pub fn price_for<'a>(prices: &'a [ModelPrice], model: &str) -> Option<&'a ModelPrice> {
+    prices
+        .iter()
+        .filter(|price| model.starts_with(price.prefix))
+        .max_by_key(|price| price.prefix.len())
+}
+
+pub fn estimate_cost(prices: &[ModelPrice], model: &str, usage: EngineUsage) -> f64 {
+    price_for(prices, model).map_or(0.0, |price| {
+        (usage.input_tokens as f64).mul_add(
+            price.input_per_million,
+            usage.output_tokens as f64 * price.output_per_million,
+        ) / 1_000_000.0
+    })
+}
+
 pub fn parse_usage(envelope: &Value) -> Option<EngineUsage> {
     let cost = envelope
         .get("total_cost_usd")
@@ -91,6 +114,129 @@ pub fn usage_label(usage: EngineUsage) -> Option<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    const PRICES: &[ModelPrice] = &[
+        ModelPrice {
+            prefix: "gpt-5-mini",
+            input_per_million: 0.25,
+            output_per_million: 2.00,
+        },
+        ModelPrice {
+            prefix: "gpt-5",
+            input_per_million: 1.25,
+            output_per_million: 10.00,
+        },
+    ];
+
+    #[test]
+    fn the_longest_matching_prefix_wins() {
+        struct Case {
+            name: &'static str,
+            model: &'static str,
+            want: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                name: "an exact match",
+                model: "gpt-5",
+                want: Some("gpt-5"),
+            },
+            Case {
+                name: "the more specific row beats the shorter one",
+                model: "gpt-5-mini",
+                want: Some("gpt-5-mini"),
+            },
+            Case {
+                name: "a dated snapshot still matches its family",
+                model: "gpt-5-2026-03-01",
+                want: Some("gpt-5"),
+            },
+            Case {
+                name: "an unpriced model has no row",
+                model: "qwen3:8b",
+                want: None,
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                price_for(PRICES, case.model).map(|price| price.prefix),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn cost_is_estimated_per_million_tokens() {
+        struct Case {
+            name: &'static str,
+            model: &'static str,
+            usage: EngineUsage,
+            want: f64,
+        }
+        let cases = [
+            Case {
+                name: "a priced model",
+                model: "gpt-5",
+                usage: EngineUsage {
+                    input_tokens: 1_000_000,
+                    output_tokens: 1_000_000,
+                    cost_usd: 0.0,
+                },
+                want: 11.25,
+            },
+            Case {
+                name: "a fraction of a million",
+                model: "gpt-5-mini",
+                usage: EngineUsage {
+                    input_tokens: 100_000,
+                    output_tokens: 10_000,
+                    cost_usd: 0.0,
+                },
+                want: 0.045,
+            },
+            Case {
+                name: "a local model costs nothing",
+                model: "qwen3:8b",
+                usage: EngineUsage {
+                    input_tokens: 1_000_000,
+                    output_tokens: 1_000_000,
+                    cost_usd: 0.0,
+                },
+                want: 0.0,
+            },
+            Case {
+                name: "no tokens, no cost",
+                model: "gpt-5",
+                usage: EngineUsage::default(),
+                want: 0.0,
+            },
+        ];
+        for case in cases {
+            let got = estimate_cost(PRICES, case.model, case.usage);
+            assert!(
+                (got - case.want).abs() < 1e-9,
+                "{}: got {got}, want {}",
+                case.name,
+                case.want
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_price_table_never_invents_a_cost() {
+        let cost = estimate_cost(
+            &[],
+            "gpt-5",
+            EngineUsage {
+                input_tokens: 1_000_000,
+                output_tokens: 1_000_000,
+                cost_usd: 0.0,
+            },
+        );
+        assert!(cost.abs() < f64::EPSILON, "{cost}");
+    }
 
     #[test]
     fn usage_comes_from_the_envelope_including_cache_tokens() {

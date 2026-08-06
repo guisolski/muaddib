@@ -1,4 +1,6 @@
-use crate::core::cost::{EngineUsage, parse_usage};
+use crate::core::api::{ApiSpec, SchemaMode, Wire};
+use crate::core::config::Config;
+use crate::core::cost::{EngineUsage, ModelPrice, parse_usage};
 use crate::core::stream::result_line;
 use serde_json::Value;
 use std::path::PathBuf;
@@ -10,6 +12,11 @@ pub enum EngineId {
     CursorAgent,
     Codex,
     Opencode,
+    Ollama,
+    Local,
+    OpenAi,
+    Anthropic,
+    Gemini,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,80 +27,317 @@ pub enum ParseStrategy {
 }
 
 #[derive(Debug)]
-pub struct EngineSpec {
-    pub id: EngineId,
-    pub name: &'static str,
+pub struct CliSpec {
     pub bin: &'static str,
     pub args: &'static [&'static str],
     pub streams: bool,
     pub parse: ParseStrategy,
-    pub supports_json_schema: bool,
     pub model_flag: Option<&'static str>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum Transport {
+    Cli(&'static CliSpec),
+    Api(&'static ApiSpec),
+}
+
+#[derive(Debug)]
+pub struct EngineSpec {
+    pub id: EngineId,
+    pub prices: &'static [ModelPrice],
+    pub name: &'static str,
+    pub transport: Transport,
+    pub supports_json_schema: bool,
     pub models: &'static [&'static str],
     pub fast_model: Option<&'static str>,
+    pub auto_select: bool,
+    pub missing_label: &'static str,
     pub install_hint: &'static str,
+}
+
+impl EngineSpec {
+    pub fn cli(&self) -> Option<&'static CliSpec> {
+        match self.transport {
+            Transport::Cli(cli) => Some(cli),
+            Transport::Api(_) => None,
+        }
+    }
+
+    pub fn api(&self) -> Option<&'static ApiSpec> {
+        match self.transport {
+            Transport::Api(api) => Some(api),
+            Transport::Cli(_) => None,
+        }
+    }
 }
 
 pub const STREAM_FORMAT_ARG: &str = "stream-json";
 
+const CLAUDE_CLI: CliSpec = CliSpec {
+    bin: "claude",
+    args: &[
+        "-p",
+        "--output-format",
+        "stream-json",
+        "--verbose",
+        "--allowedTools=WebSearch,WebFetch",
+    ],
+    streams: true,
+    parse: ParseStrategy::ClaudeJson,
+    model_flag: Some("--model"),
+};
+
+const CURSOR_AGENT_CLI: CliSpec = CliSpec {
+    bin: "cursor-agent",
+    args: &["-p", "--output-format", "json"],
+    streams: false,
+    parse: ParseStrategy::GenericJson,
+    model_flag: Some("--model"),
+};
+
+const CODEX_CLI: CliSpec = CliSpec {
+    bin: "codex",
+    args: &["exec", "--skip-git-repo-check"],
+    streams: false,
+    parse: ParseStrategy::RawText,
+    model_flag: Some("--model"),
+};
+
+const OPENCODE_CLI: CliSpec = CliSpec {
+    bin: "opencode",
+    args: &["run"],
+    streams: false,
+    parse: ParseStrategy::RawText,
+    model_flag: Some("--model"),
+};
+
+const OLLAMA_API: ApiSpec = ApiSpec {
+    wire: Wire::OllamaChat,
+    base_url: "http://localhost:11434",
+    base_url_env: &["OLLAMA_HOST"],
+    path: "/api/chat",
+    models_path: "/api/tags",
+    auth_header: None,
+    auth_prefix: "",
+    key_env: &[],
+    extra_headers: &[],
+    schema_mode: SchemaMode::JsonObject,
+    default_max_tokens: 0,
+    probes_models: true,
+};
+
+const LOCAL_API: ApiSpec = ApiSpec {
+    wire: Wire::OpenAiChat,
+    base_url: "",
+    base_url_env: &["MUADDIB_LOCAL_BASE_URL", "OPENAI_BASE_URL"],
+    path: "/v1/chat/completions",
+    models_path: "/v1/models",
+    auth_header: Some("authorization"),
+    auth_prefix: "Bearer ",
+    key_env: &["MUADDIB_LOCAL_API_KEY"],
+    extra_headers: &[],
+    schema_mode: SchemaMode::JsonObject,
+    default_max_tokens: 0,
+    probes_models: true,
+};
+
+const OPENAI_API: ApiSpec = ApiSpec {
+    wire: Wire::OpenAiChat,
+    base_url: "https://api.openai.com",
+    base_url_env: &["OPENAI_BASE_URL"],
+    path: "/v1/chat/completions",
+    models_path: "/v1/models",
+    auth_header: Some("authorization"),
+    auth_prefix: "Bearer ",
+    key_env: &["OPENAI_API_KEY"],
+    extra_headers: &[],
+    schema_mode: SchemaMode::JsonObject,
+    default_max_tokens: 0,
+    probes_models: false,
+};
+
+const ANTHROPIC_API: ApiSpec = ApiSpec {
+    wire: Wire::AnthropicMessages,
+    base_url: "https://api.anthropic.com",
+    base_url_env: &["ANTHROPIC_BASE_URL"],
+    path: "/v1/messages",
+    models_path: "/v1/models",
+    auth_header: Some("x-api-key"),
+    auth_prefix: "",
+    key_env: &["ANTHROPIC_API_KEY"],
+    extra_headers: &[("anthropic-version", "2023-06-01")],
+    schema_mode: SchemaMode::JsonObject,
+    default_max_tokens: 16_384,
+    probes_models: false,
+};
+
+const GEMINI_API: ApiSpec = ApiSpec {
+    wire: Wire::GeminiGenerate,
+    base_url: "https://generativelanguage.googleapis.com",
+    base_url_env: &[],
+    path: "/v1beta/models/{model}:generateContent",
+    models_path: "/v1beta/models",
+    auth_header: Some("x-goog-api-key"),
+    auth_prefix: "",
+    key_env: &["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    extra_headers: &[],
+    schema_mode: SchemaMode::JsonObject,
+    default_max_tokens: 0,
+    probes_models: false,
+};
+
+const OPENAI_PRICES: &[ModelPrice] = &[
+    ModelPrice {
+        prefix: "gpt-5-mini",
+        input_per_million: 0.25,
+        output_per_million: 2.00,
+    },
+    ModelPrice {
+        prefix: "gpt-5",
+        input_per_million: 1.25,
+        output_per_million: 10.00,
+    },
+];
+
+const ANTHROPIC_PRICES: &[ModelPrice] = &[
+    ModelPrice {
+        prefix: "claude-opus-5",
+        input_per_million: 5.00,
+        output_per_million: 25.00,
+    },
+    ModelPrice {
+        prefix: "claude-sonnet-5",
+        input_per_million: 3.00,
+        output_per_million: 15.00,
+    },
+    ModelPrice {
+        prefix: "claude-haiku-4-5",
+        input_per_million: 1.00,
+        output_per_million: 5.00,
+    },
+];
+
+const GEMINI_PRICES: &[ModelPrice] = &[
+    ModelPrice {
+        prefix: "gemini-2.5-flash",
+        input_per_million: 0.30,
+        output_per_million: 2.50,
+    },
+    ModelPrice {
+        prefix: "gemini-2.5-pro",
+        input_per_million: 1.25,
+        output_per_million: 10.00,
+    },
+];
+
 pub const ENGINES: &[EngineSpec] = &[
     EngineSpec {
         id: EngineId::Claude,
+        prices: &[],
         name: "claude",
-        bin: "claude",
-        args: &[
-            "-p",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--allowedTools=WebSearch,WebFetch",
-        ],
-        streams: true,
-        parse: ParseStrategy::ClaudeJson,
+        transport: Transport::Cli(&CLAUDE_CLI),
         supports_json_schema: true,
-        model_flag: Some("--model"),
         models: &["opus", "sonnet", "haiku"],
         fast_model: Some("haiku"),
+        auto_select: true,
+        missing_label: "not installed",
         install_hint: "npm install -g @anthropic-ai/claude-code",
     },
     EngineSpec {
         id: EngineId::CursorAgent,
+        prices: &[],
         name: "cursor-agent",
-        bin: "cursor-agent",
-        args: &["-p", "--output-format", "json"],
-        streams: false,
-        parse: ParseStrategy::GenericJson,
+        transport: Transport::Cli(&CURSOR_AGENT_CLI),
         supports_json_schema: false,
-        model_flag: Some("--model"),
         models: &["auto", "gpt-5", "sonnet-4.5"],
         fast_model: None,
+        auto_select: true,
+        missing_label: "not installed",
         install_hint: "curl https://cursor.com/install -fsS | bash",
     },
     EngineSpec {
         id: EngineId::Codex,
+        prices: &[],
         name: "codex",
-        bin: "codex",
-        args: &["exec", "--skip-git-repo-check"],
-        streams: false,
-        parse: ParseStrategy::RawText,
+        transport: Transport::Cli(&CODEX_CLI),
         supports_json_schema: false,
-        model_flag: Some("--model"),
         models: &["gpt-5-codex", "gpt-5"],
         fast_model: None,
+        auto_select: true,
+        missing_label: "not installed",
         install_hint: "npm install -g @openai/codex",
     },
     EngineSpec {
         id: EngineId::Opencode,
+        prices: &[],
         name: "opencode",
-        bin: "opencode",
-        args: &["run"],
-        streams: false,
-        parse: ParseStrategy::RawText,
+        transport: Transport::Cli(&OPENCODE_CLI),
         supports_json_schema: false,
-        model_flag: Some("--model"),
         models: &["anthropic/claude-sonnet-4-5", "openai/gpt-5"],
         fast_model: None,
+        auto_select: true,
+        missing_label: "not installed",
         install_hint: "npm install -g opencode-ai",
+    },
+    EngineSpec {
+        id: EngineId::Ollama,
+        prices: &[],
+        name: "ollama",
+        transport: Transport::Api(&OLLAMA_API),
+        supports_json_schema: false,
+        models: &[],
+        fast_model: None,
+        auto_select: true,
+        missing_label: "not running",
+        install_hint: "https://ollama.com/download, then: ollama pull qwen3:8b",
+    },
+    EngineSpec {
+        id: EngineId::Local,
+        prices: &[],
+        name: "local",
+        transport: Transport::Api(&LOCAL_API),
+        supports_json_schema: false,
+        models: &[],
+        fast_model: None,
+        auto_select: true,
+        missing_label: "no base url",
+        install_hint: "set [engines.local] base_url to any OpenAI-compatible server",
+    },
+    EngineSpec {
+        id: EngineId::OpenAi,
+        prices: OPENAI_PRICES,
+        name: "openai",
+        transport: Transport::Api(&OPENAI_API),
+        supports_json_schema: false,
+        models: &["gpt-5", "gpt-5-mini"],
+        fast_model: Some("gpt-5-mini"),
+        auto_select: false,
+        missing_label: "no API key",
+        install_hint: "export OPENAI_API_KEY=...",
+    },
+    EngineSpec {
+        id: EngineId::Anthropic,
+        prices: ANTHROPIC_PRICES,
+        name: "anthropic",
+        transport: Transport::Api(&ANTHROPIC_API),
+        supports_json_schema: false,
+        models: &["claude-sonnet-5", "claude-opus-5", "claude-haiku-4-5"],
+        fast_model: Some("claude-haiku-4-5"),
+        auto_select: false,
+        missing_label: "no API key",
+        install_hint: "export ANTHROPIC_API_KEY=...",
+    },
+    EngineSpec {
+        id: EngineId::Gemini,
+        prices: GEMINI_PRICES,
+        name: "gemini",
+        transport: Transport::Api(&GEMINI_API),
+        supports_json_schema: false,
+        models: &["gemini-2.5-flash", "gemini-2.5-pro"],
+        fast_model: Some("gemini-2.5-flash"),
+        auto_select: false,
+        missing_label: "no API key",
+        install_hint: "export GEMINI_API_KEY=...",
     },
 ];
 
@@ -124,7 +368,7 @@ impl EngineOutput {
 pub enum EngineError {
     #[error("engine timed out after {0:?}")]
     TimedOut(Duration),
-    #[error("engine exited with status {status}: {stderr_tail}")]
+    #[error("engine failed with status {status}: {stderr_tail}")]
     Failed { status: i32, stderr_tail: String },
     #[error("engine reported an error: {0}")]
     Reported(String),
@@ -132,9 +376,14 @@ pub enum EngineError {
     Spawn(String),
 }
 
-pub fn build_args(spec: &EngineSpec, model: Option<&str>, job: &EngineJob) -> Vec<String> {
-    let mut args: Vec<String> = spec.args.iter().map(ToString::to_string).collect();
-    if let (Some(flag), Some(model)) = (spec.model_flag, model) {
+pub fn build_args(
+    spec: &EngineSpec,
+    cli: &CliSpec,
+    model: Option<&str>,
+    job: &EngineJob,
+) -> Vec<String> {
+    let mut args: Vec<String> = cli.args.iter().map(ToString::to_string).collect();
+    if let (Some(flag), Some(model)) = (cli.model_flag, model) {
         args.push(flag.to_string());
         args.push(model.to_string());
     }
@@ -153,10 +402,48 @@ pub struct EngineStatus {
     pub spec: &'static EngineSpec,
     pub available: bool,
     pub path: Option<PathBuf>,
+    pub endpoint: Option<String>,
+    pub models: Vec<String>,
+    pub key_from_env: bool,
+}
+
+impl EngineStatus {
+    pub fn unavailable(spec: &'static EngineSpec) -> Self {
+        Self {
+            spec,
+            available: false,
+            path: None,
+            endpoint: None,
+            models: spec.models.iter().map(ToString::to_string).collect(),
+            key_from_env: false,
+        }
+    }
+
+    pub fn offered_models(&self) -> Vec<String> {
+        if self.models.is_empty() {
+            self.spec.models.iter().map(ToString::to_string).collect()
+        } else {
+            self.models.clone()
+        }
+    }
+}
+
+pub fn resolve_model(config: &Config, status: &EngineStatus, fast: bool) -> Option<String> {
+    if fast
+        && let Some(model) = config
+            .fast_model_override(status.spec.name)
+            .or(status.spec.fast_model)
+    {
+        return Some(model.to_string());
+    }
+    config
+        .model_override(status.spec.name)
+        .map(str::to_string)
+        .or_else(|| status.offered_models().first().cloned())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("no supported engine CLI is installed")]
+#[error("no engine is available")]
 pub struct NoEngineAvailable;
 
 pub fn choose_engine<'a>(
@@ -171,7 +458,8 @@ pub fn choose_engine<'a>(
     }
     let fallback = statuses
         .iter()
-        .find(|status| status.available)
+        .find(|status| status.available && status.spec.auto_select)
+        .or_else(|| statuses.iter().find(|status| status.available))
         .ok_or(NoEngineAvailable)?;
     let notice = format!(
         "engine '{requested}' is not available; using '{}'",
@@ -261,6 +549,7 @@ fn probe_text_keys(value: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::api::MODEL_PLACEHOLDER;
     use std::collections::BTreeSet;
 
     fn job(prompt: &str, schema: Option<&'static str>) -> EngineJob {
@@ -273,9 +562,12 @@ mod tests {
 
     fn status(spec: &'static EngineSpec, available: bool) -> EngineStatus {
         EngineStatus {
+            key_from_env: false,
             spec,
             available,
             path: available.then(|| PathBuf::from("/fake/bin")),
+            endpoint: None,
+            models: spec.models.iter().map(ToString::to_string).collect(),
         }
     }
 
@@ -290,11 +582,96 @@ mod tests {
     }
 
     #[test]
+    fn every_engine_declares_exactly_one_transport() {
+        for spec in ENGINES {
+            assert_ne!(spec.cli().is_some(), spec.api().is_some(), "{}", spec.name);
+        }
+    }
+
+    #[test]
     fn only_engines_asking_for_a_line_stream_claim_to_stream() {
         for spec in ENGINES {
+            let Some(cli) = spec.cli() else { continue };
             assert_eq!(
-                spec.streams,
-                spec.args.contains(&STREAM_FORMAT_ARG),
+                cli.streams,
+                cli.args.contains(&STREAM_FORMAT_ARG),
+                "{}",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn api_engines_declare_a_key_env_exactly_when_they_authenticate() {
+        for spec in ENGINES {
+            let Some(api) = spec.api() else { continue };
+            assert_eq!(
+                api.auth_header.is_none(),
+                api.key_env.is_empty(),
+                "{}",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn api_engines_interpolate_the_model_only_into_the_path() {
+        for spec in ENGINES {
+            let Some(api) = spec.api() else { continue };
+            assert!(!api.base_url.contains(MODEL_PLACEHOLDER), "{}", spec.name);
+            assert!(api.path.starts_with('/'), "{}", spec.name);
+            assert!(api.models_path.starts_with('/'), "{}", spec.name);
+        }
+    }
+
+    #[test]
+    fn wires_that_require_a_token_budget_declare_a_default() {
+        for spec in ENGINES {
+            let Some(api) = spec.api() else { continue };
+            let required = api.wire == Wire::AnthropicMessages;
+            assert_eq!(api.default_max_tokens > 0, required, "{}", spec.name);
+        }
+    }
+
+    #[test]
+    fn no_api_engine_sends_the_draft_seven_schema_natively_yet() {
+        for spec in ENGINES {
+            let Some(api) = spec.api() else { continue };
+            assert_ne!(api.schema_mode, SchemaMode::NativeSchema, "{}", spec.name);
+        }
+    }
+
+    #[test]
+    fn only_engines_that_probe_can_ship_without_a_model_list() {
+        for spec in ENGINES {
+            let Some(api) = spec.api() else { continue };
+            assert!(
+                api.probes_models || !spec.models.is_empty(),
+                "{}",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn paid_api_engines_are_never_chosen_automatically() {
+        for spec in ENGINES {
+            let Some(api) = spec.api() else { continue };
+            assert_eq!(
+                spec.auto_select,
+                api.auth_header.is_none() || api.probes_models,
+                "{}",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn only_configurable_api_engines_ship_without_a_base_url() {
+        for spec in ENGINES {
+            let Some(api) = spec.api() else { continue };
+            assert!(
+                api.base_url.is_empty() || api.base_url.starts_with("http"),
                 "{}",
                 spec.name
             );
@@ -359,7 +736,8 @@ mod tests {
     #[test]
     fn build_args_places_the_prompt_last() {
         for spec in ENGINES {
-            let args = build_args(spec, Some("some-model"), &job("the prompt", None));
+            let Some(cli) = spec.cli() else { continue };
+            let args = build_args(spec, cli, Some("some-model"), &job("the prompt", None));
             assert_eq!(
                 args.last().map(String::as_str),
                 Some("the prompt"),
@@ -372,11 +750,12 @@ mod tests {
     #[test]
     fn build_args_adds_the_model_flag_only_when_a_model_is_set() {
         for spec in ENGINES {
-            let with_model = build_args(spec, Some("some-model"), &job("p", None));
-            let without_model = build_args(spec, None, &job("p", None));
+            let Some(cli) = spec.cli() else { continue };
+            let with_model = build_args(spec, cli, Some("some-model"), &job("p", None));
+            let without_model = build_args(spec, cli, None, &job("p", None));
             assert!(
                 with_model.windows(2).any(|pair| {
-                    pair[0] == spec.model_flag.unwrap_or_default() && pair[1] == "some-model"
+                    pair[0] == cli.model_flag.unwrap_or_default() && pair[1] == "some-model"
                 }),
                 "{}",
                 spec.name
@@ -419,13 +798,120 @@ mod tests {
         ];
         for case in cases {
             let spec = engine_by_name(case.engine).unwrap();
-            let args = build_args(spec, None, &job("p", case.schema));
+            let cli = spec.cli().unwrap();
+            let args = build_args(spec, cli, None, &job("p", case.schema));
             assert_eq!(
                 args.iter().any(|arg| arg == "--json-schema"),
                 case.want_flag,
                 "{}",
                 case.name
             );
+        }
+    }
+
+    #[test]
+    fn resolve_model_follows_fast_then_config_then_the_offered_list() {
+        struct Case {
+            name: &'static str,
+            toml: &'static str,
+            fast: bool,
+            discovered: &'static [&'static str],
+            want: Option<&'static str>,
+        }
+        let cases = [
+            Case {
+                name: "no config falls back to the first curated model",
+                toml: "",
+                fast: false,
+                discovered: &[],
+                want: Some("opus"),
+            },
+            Case {
+                name: "a configured model wins",
+                toml: "[engines.claude]\nmodel = \"sonnet\"",
+                fast: false,
+                discovered: &[],
+                want: Some("sonnet"),
+            },
+            Case {
+                name: "fast mode prefers the table's fast model",
+                toml: "[engines.claude]\nmodel = \"sonnet\"",
+                fast: true,
+                discovered: &[],
+                want: Some("haiku"),
+            },
+            Case {
+                name: "a configured fast model beats the table's",
+                toml: "[engines.claude]\nfast_model = \"my-haiku\"",
+                fast: true,
+                discovered: &[],
+                want: Some("my-haiku"),
+            },
+            Case {
+                name: "outside fast mode the fast model is ignored",
+                toml: "[engines.claude]\nfast_model = \"my-haiku\"",
+                fast: false,
+                discovered: &[],
+                want: Some("opus"),
+            },
+            Case {
+                name: "discovered models take the place of the curated list",
+                toml: "",
+                fast: false,
+                discovered: &["qwen3:8b", "llama3.2"],
+                want: Some("qwen3:8b"),
+            },
+        ];
+        for case in cases {
+            let config = crate::core::config::parse_config(case.toml).expect("config parses");
+            let mut engine_status = status(&ENGINES[0], true);
+            if !case.discovered.is_empty() {
+                engine_status.models = case.discovered.iter().map(ToString::to_string).collect();
+            }
+            assert_eq!(
+                resolve_model(&config, &engine_status, case.fast).as_deref(),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn an_engine_with_no_models_at_all_resolves_to_none() {
+        let mut engine_status = status(&ENGINES[0], true);
+        engine_status.models = Vec::new();
+        let spec_without_models: &'static EngineSpec = ENGINES
+            .iter()
+            .find(|spec| spec.models.is_empty())
+            .expect("a keyless probing engine ships no curated models");
+        engine_status.spec = spec_without_models;
+        assert_eq!(
+            resolve_model(&Config::default(), &engine_status, false),
+            None
+        );
+    }
+
+    #[test]
+    fn every_curated_model_of_a_paid_engine_has_a_price() {
+        for spec in ENGINES {
+            let paid = spec
+                .api()
+                .is_some_and(|api| api.auth_header.is_some() && !api.probes_models);
+            assert_eq!(
+                !spec.prices.is_empty(),
+                paid,
+                "{} carries prices iff it bills",
+                spec.name
+            );
+            for model in spec.models {
+                assert_eq!(
+                    crate::core::cost::price_for(spec.prices, model).is_some(),
+                    paid,
+                    "{}: model {model}",
+                    spec.name
+                );
+            }
         }
     }
 
