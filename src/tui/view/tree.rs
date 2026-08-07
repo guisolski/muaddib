@@ -28,13 +28,15 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Paragraph::new(lines).scroll((u16::try_from(offset).unwrap_or(u16::MAX), 0)),
         content,
     );
-    frame.render_widget(
+    let footer_line = if let Some(notice) = &app.notice {
+        Line::styled(notice.clone(), theme::warn())
+    } else {
         Line::styled(
             "Enter view \u{00b7} f branch \u{00b7} s save session \u{00b7} Esc back",
             theme::dim(),
-        ),
-        footer,
-    );
+        )
+    };
+    frame.render_widget(footer_line, footer);
 }
 
 fn scroll_offset(selected: usize, total_lines: usize, height: usize) -> usize {
