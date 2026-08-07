@@ -1,9 +1,8 @@
-all_features = true
-
 exclude_globs = [
     "src/main.rs",
     "src/config_store.rs",
     "src/history_store.rs",
+    "src/vault_store.rs",
     "src/pipeline/mod.rs",
     "src/pipeline/http.rs",
     "src/pipeline/images.rs",
@@ -13,5 +12,6 @@ exclude_globs = [
     "src/tui/theme.rs",
     "src/tui/view/config_modal.rs",
     "src/tui/view/followup.rs",
+    "src/tui/view/passphrase_modal.rs",
     "src/tui/view/tree.rs",
 ]

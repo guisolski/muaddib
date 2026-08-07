@@ -226,12 +226,41 @@ pub async fn installed_models(api: &ApiSpec, base_url: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::engine::{ENGINES, engine_by_name};
+    use crate::core::api::{SchemaMode, Wire};
+    use crate::core::engine::{ENGINES, EngineId, Transport, engine_by_name};
     use std::sync::{Arc, Mutex};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     type Captured = Arc<Mutex<Vec<String>>>;
+
+    static SCHEMA_CAPABLE_API: ApiSpec = ApiSpec {
+        wire: Wire::OpenAiChat,
+        base_url: "https://api.example",
+        base_url_env: &[],
+        path: "/v1/chat/completions",
+        models_path: "",
+        auth_header: None,
+        auth_prefix: "",
+        key_env: &[],
+        extra_headers: &[],
+        schema_mode: SchemaMode::NativeSchema,
+        default_max_tokens: 1024,
+        probes_models: false,
+    };
+
+    static SCHEMA_CAPABLE: EngineSpec = EngineSpec {
+        id: EngineId::OpenAi,
+        prices: &[],
+        name: "schema-capable",
+        transport: Transport::Api(&SCHEMA_CAPABLE_API),
+        supports_json_schema: true,
+        models: &[],
+        fast_model: None,
+        auto_select: false,
+        missing_label: "not configured",
+        install_hint: "a test-only row",
+    };
 
     async fn serve(script: Vec<(u16, &'static str)>) -> (String, Captured) {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -402,6 +431,135 @@ mod tests {
             );
             assert!(engine.is_some(), "{}", spec.name);
             assert_eq!(engine.unwrap().name(), spec.name);
+        }
+    }
+
+    #[tokio::test]
+    async fn the_client_identifies_itself_and_refuses_to_chase_redirects() {
+        let body = include_str!("../../tests/fixtures/api/openai_chat.json");
+        let (base, captured) = serve(vec![(200, body)]).await;
+        let engine = engine_at(&base, "openai", Some("sk-test"));
+        engine.run(&job(5_000)).await.expect("the call succeeds");
+        let requests = captured.lock().unwrap();
+        assert!(
+            requests[0].contains(concat!("user-agent: muaddib/", env!("CARGO_PKG_VERSION"))),
+            "{}",
+            requests[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_redirect_is_never_chased_to_a_second_endpoint() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let body = include_str!("../../tests/fixtures/api/openai_chat.json");
+        tokio::spawn(async move {
+            let redirect = "HTTP/1.1 302 Found\r\nLocation: /elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string();
+            let followed = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            for response in [redirect, followed] {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut request = vec![0_u8; 8192];
+                let _ = stream.read(&mut request).await;
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.flush().await;
+            }
+        });
+        let engine = engine_at(&base, "openai", Some("sk-test"));
+        assert!(
+            engine.run(&job(5_000)).await.is_err(),
+            "the redirect target must never be reached"
+        );
+    }
+
+    #[test]
+    fn an_engine_is_built_from_a_status_only_when_it_has_an_endpoint() {
+        struct Case {
+            name: &'static str,
+            engine: &'static str,
+            endpoint: Option<&'static str>,
+            want: bool,
+        }
+        let cases = [
+            Case {
+                name: "an api engine with a resolved endpoint",
+                engine: "openai",
+                endpoint: Some("https://api.openai.com"),
+                want: true,
+            },
+            Case {
+                name: "an api engine whose base url never resolved",
+                engine: "local",
+                endpoint: None,
+                want: false,
+            },
+            Case {
+                name: "a cli engine has no api spec at all",
+                engine: "claude",
+                endpoint: Some("https://api.openai.com"),
+                want: false,
+            },
+        ];
+        for case in cases {
+            let spec = engine_by_name(case.engine).unwrap();
+            let status = EngineStatus {
+                endpoint: case.endpoint.map(ToString::to_string),
+                ..EngineStatus::unavailable(spec)
+            };
+            let engine =
+                ApiEngine::from_status(&status, ApiKey::new("sk-test"), "m".to_string(), None);
+            assert_eq!(engine.is_some(), case.want, "{}", case.name);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_reporting_run_announces_the_model_it_is_asking() {
+        let body = include_str!("../../tests/fixtures/api/openai_chat.json");
+        let (base, _) = serve(vec![(200, body)]).await;
+        let engine = engine_at(&base, "openai", Some("sk-test"));
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        engine
+            .run_reporting(&job(5_000), tx)
+            .await
+            .expect("the call succeeds");
+        let activity = rx.try_recv().expect("the sink was told about the call");
+        assert_eq!(activity.target, "the-model");
+    }
+
+    #[test]
+    fn json_schema_support_is_read_from_the_row_rather_than_assumed() {
+        struct Case {
+            name: &'static str,
+            spec: &'static EngineSpec,
+            want: bool,
+        }
+        let cases = [
+            Case {
+                name: "no shipped api row claims native schema support",
+                spec: engine_by_name("openai").unwrap(),
+                want: false,
+            },
+            Case {
+                name: "a row that claims it is believed",
+                spec: &SCHEMA_CAPABLE,
+                want: true,
+            },
+        ];
+        for case in cases {
+            let engine = ApiEngine::new(
+                case.spec,
+                case.spec.api().unwrap(),
+                "http://127.0.0.1:9",
+                "m".to_string(),
+                ApiKey::new("sk-test"),
+                0,
+            )
+            .expect("the engine builds");
+            assert_eq!(engine.supports_json_schema(), case.want, "{}", case.name);
         }
     }
 }

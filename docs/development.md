@@ -110,12 +110,23 @@ skipped — a new row in the module's `Case` table whose `want` actually pins th
 behavior the mutant changed. Reach for an `exclude_re` entry in
 `.cargo/mutants.toml` only when the mutant is genuinely unobservable, and say why.
 
-`.cargo/mutants.toml` already excludes 13 files with zero unit tests — `main.rs`,
+`.cargo/mutants.toml` already excludes 15 files with zero unit tests — `main.rs`,
 the filesystem and HTTP shims, and the render-only views. Every mutant in them
 would survive, which would drown the signal. The exclusion is per *file*, not per
-directory: six of the nine files in `src/tui/view/` are tested and stay in scope,
-and so does `tui/update.rs`, which despite its location is a pure reducer with 48
+directory: six of the ten files in `src/tui/view/` are tested and stay in scope,
+and so does `tui/update.rs`, which despite its location is a pure reducer with 51
 tests and one of the best targets in the crate.
+
+`vault_store.rs` is excluded on the same grounds as `config_store.rs` and
+`history_store.rs`: it resolves a path, reads a file and writes one atomically, and
+nothing else. The logic worth mutating — the envelope, the KDF parameter bounds,
+the AAD — lives in `core/vault.rs`, which is in scope and where the boundary tests
+are.
+
+**A gap worth knowing about.** The diff is built with `git diff`, which does not see
+untracked files. A brand-new module is invisible to the gate until it is `git add`ed,
+so a large change can pass `make mutants` while its newest code was never mutated at
+all. Stage new files before trusting a green run.
 
 Two settings worth knowing before you change them. The timeout floor is raised to
 60s because `tests/pipeline_integration.rs` uses 20s internal deadlines — at the

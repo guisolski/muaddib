@@ -388,6 +388,56 @@ mod tests {
     }
 
     #[test]
+    fn a_header_that_lies_about_its_own_size_is_named_precisely() {
+        struct Case {
+            name: &'static str,
+            mutate: fn(&mut Vec<u8>),
+            want: VaultError,
+        }
+        let cases = [
+            Case {
+                name: "a file the size of a bare header is judged by its magic",
+                mutate: |bytes| {
+                    bytes.truncate(HEADER_FIXED);
+                    bytes[0] = b'X';
+                },
+                want: VaultError::BadMagic,
+            },
+            Case {
+                name: "a name list longer than the file it lives in",
+                mutate: |bytes| {
+                    bytes[HEADER_FIXED - 2] = 0xff;
+                    bytes[HEADER_FIXED - 1] = 0xff;
+                },
+                want: VaultError::Truncated,
+            },
+        ];
+        for case in cases {
+            let mut sealed = sealed_fixture();
+            (case.mutate)(&mut sealed);
+            assert_eq!(
+                open(&sealed, "correct horse"),
+                Err(case.want),
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn the_names_are_readable_from_a_file_that_stops_right_after_them() {
+        let sealed = sealed_fixture();
+        let names_len = usize::from(u16::from_le_bytes([
+            sealed[HEADER_FIXED - 2],
+            sealed[HEADER_FIXED - 1],
+        ]));
+        assert_eq!(
+            stored_names(&sealed[..HEADER_FIXED + names_len]),
+            vec!["anthropic".to_string(), "openai".to_string()]
+        );
+    }
+
+    #[test]
     fn opening_rejects_a_tampered_or_wrong_input() {
         struct Case {
             name: &'static str,

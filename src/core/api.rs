@@ -416,6 +416,146 @@ mod tests {
         }
     }
 
+    const fn native_spec(wire: Wire) -> ApiSpec {
+        ApiSpec {
+            wire,
+            base_url: "https://api.example",
+            base_url_env: &[],
+            path: "/v1/chat",
+            models_path: "",
+            auth_header: None,
+            auth_prefix: "",
+            key_env: &[],
+            extra_headers: &[],
+            schema_mode: SchemaMode::NativeSchema,
+            default_max_tokens: 1024,
+            probes_models: false,
+        }
+    }
+
+    static NATIVE_OPENAI: ApiSpec = native_spec(Wire::OpenAiChat);
+    static NATIVE_ANTHROPIC: ApiSpec = native_spec(Wire::AnthropicMessages);
+    static NATIVE_GEMINI: ApiSpec = native_spec(Wire::GeminiGenerate);
+    static NATIVE_OLLAMA: ApiSpec = native_spec(Wire::OllamaChat);
+
+    const OBJECT_SCHEMA: &str = r#"{"type":"object","properties":{"summary":{"type":"string"}}}"#;
+
+    #[test]
+    fn a_native_schema_engine_carries_the_schema_in_the_body_of_every_wire() {
+        struct Case {
+            name: &'static str,
+            spec: &'static ApiSpec,
+            pointer: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "openai nests it under response_format",
+                spec: &NATIVE_OPENAI,
+                pointer: "/response_format/json_schema/schema/type",
+            },
+            Case {
+                name: "anthropic nests it under output_config",
+                spec: &NATIVE_ANTHROPIC,
+                pointer: "/output_config/format/schema/type",
+            },
+            Case {
+                name: "gemini nests it under generationConfig",
+                spec: &NATIVE_GEMINI,
+                pointer: "/generationConfig/responseSchema/type",
+            },
+            Case {
+                name: "ollama puts it straight into format",
+                spec: &NATIVE_OLLAMA,
+                pointer: "/format/type",
+            },
+        ];
+        for case in cases {
+            let body = request_body(&call(case.spec, Some(OBJECT_SCHEMA), 256));
+            assert_eq!(
+                body.pointer(case.pointer).and_then(Value::as_str),
+                Some("object"),
+                "{}: {body}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_native_schema_engine_falls_back_when_the_schema_will_not_parse() {
+        struct Case {
+            name: &'static str,
+            spec: &'static ApiSpec,
+            absent: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "openai drops to a plain json object",
+                spec: &NATIVE_OPENAI,
+                absent: "/response_format/json_schema",
+            },
+            Case {
+                name: "anthropic sends no output_config",
+                spec: &NATIVE_ANTHROPIC,
+                absent: "/output_config",
+            },
+            Case {
+                name: "gemini sends no responseSchema",
+                spec: &NATIVE_GEMINI,
+                absent: "/generationConfig/responseSchema",
+            },
+            Case {
+                name: "ollama sends no format",
+                spec: &NATIVE_OLLAMA,
+                absent: "/format",
+            },
+        ];
+        for case in cases {
+            let body = request_body(&call(case.spec, Some("{not json"), 256));
+            assert!(body.pointer(case.absent).is_none(), "{}: {body}", case.name);
+        }
+    }
+
+    #[test]
+    fn a_reported_cost_wins_over_the_price_table_and_an_absent_one_is_estimated() {
+        const PRICES: &[ModelPrice] = &[ModelPrice {
+            prefix: "the-model",
+            input_per_million: 3.0,
+            output_per_million: 15.0,
+        }];
+        struct Case {
+            name: &'static str,
+            body: &'static str,
+            want: f64,
+        }
+        let cases = [
+            Case {
+                name: "the provider's own total is kept",
+                body: r#"{"total_cost_usd":0.42,"usage":{"input_tokens":1000000,"output_tokens":1000000}}"#,
+                want: 0.42,
+            },
+            Case {
+                name: "without a reported total the tokens are priced",
+                body: r#"{"usage":{"input_tokens":1000000,"output_tokens":1000000}}"#,
+                want: 18.0,
+            },
+        ];
+        for case in cases {
+            let usage = response_usage(
+                Wire::AnthropicMessages,
+                &parse(case.body),
+                PRICES,
+                "the-model",
+            )
+            .expect("the body reports usage");
+            assert!(
+                (usage.cost_usd - case.want).abs() < 1e-9,
+                "{}: got {}",
+                case.name,
+                usage.cost_usd
+            );
+        }
+    }
+
     #[test]
     fn endpoints_interpolate_the_model_and_never_double_the_separator() {
         struct Case {
