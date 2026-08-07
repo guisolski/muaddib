@@ -1,26 +1,26 @@
 class Muaddib < Formula
   desc "AI-powered meta-search for your terminal"
   homepage "https://github.com/guisolski/muaddib"
-  version "0.2.0"
+  version "0.2.1"
   license "MIT"
 
   on_macos do
     if Hardware::CPU.arm?
-      url "https://github.com/guisolski/muaddib/releases/download/v0.2.0/muaddib-aarch64-apple-darwin.tar.gz"
-      sha256 "4bb8487489ce6cef6ad8d28f5c9a43725c8eb87ed89cb9213795f1dc98b5a281"
+      url "https://github.com/guisolski/muaddib/releases/download/v0.2.1/muaddib-aarch64-apple-darwin.tar.gz"
+      sha256 "0e75c8a951b264e7bf9504916425a62ee60fe0ae7eff0c2b209e787f0470c0b9"
     else
-      url "https://github.com/guisolski/muaddib/releases/download/v0.2.0/muaddib-x86_64-apple-darwin.tar.gz"
-      sha256 "d6db4eb8ee248069183d674b2edaa92759acf3c01a96081e461695e9d064228b"
+      url "https://github.com/guisolski/muaddib/releases/download/v0.2.1/muaddib-x86_64-apple-darwin.tar.gz"
+      sha256 "458eb555e8cde759931dc00dd1afeec609b921bb85430901dfcd3902b8c04c33"
     end
   end
 
   on_linux do
     if Hardware::CPU.arm?
-      url "https://github.com/guisolski/muaddib/releases/download/v0.2.0/muaddib-aarch64-unknown-linux-gnu.tar.gz"
-      sha256 "1c7c89720ea9e51e8484c62149958a3a29bf0d412561be620bb5db922363ccba"
+      url "https://github.com/guisolski/muaddib/releases/download/v0.2.1/muaddib-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "462c8dbad336be5dbe0f80d33bddcf54730c5a92f147a68d546b558a63e2a03b"
     else
-      url "https://github.com/guisolski/muaddib/releases/download/v0.2.0/muaddib-x86_64-unknown-linux-gnu.tar.gz"
-      sha256 "98cff24ee2c2fe067e59464058527b5c8d20ee7296a02a6f4536ededd4334ac2"
+      url "https://github.com/guisolski/muaddib/releases/download/v0.2.1/muaddib-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "756a496f7fab5a815dcf72766ec76e548c7c79549c74c2090a7f57f86fe42bef"
     end
   end
 
