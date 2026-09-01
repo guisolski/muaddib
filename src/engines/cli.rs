@@ -348,6 +348,34 @@ mod tests {
         install_hint: "",
     };
 
+    #[test]
+    fn has_web_tools_follows_the_cli_row() {
+        struct Case {
+            name: &'static str,
+            spec: &'static EngineSpec,
+            cli: &'static CliSpec,
+            want: bool,
+        }
+        let cases = [
+            Case {
+                name: "streaming claude stand-in",
+                spec: &STREAMING_SPEC,
+                cli: &STREAMING_CLI,
+                want: true,
+            },
+            Case {
+                name: "quiet echo",
+                spec: &ECHO_SPEC,
+                cli: &ECHO_CLI,
+                want: false,
+            },
+        ];
+        for case in cases {
+            let engine = CliEngine::new(case.spec, case.cli, PathBuf::from("/bin/echo"));
+            assert_eq!(engine.has_web_tools(), case.want, "{}", case.name);
+        }
+    }
+
     async fn drain_activity(
         spec: &'static EngineSpec,
         cli: &'static CliSpec,

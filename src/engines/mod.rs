@@ -626,4 +626,21 @@ mod tests {
             ]
         );
     }
+
+    struct BareEngine;
+
+    impl Engine for BareEngine {
+        fn name(&self) -> &'static str {
+            "bare"
+        }
+
+        fn run<'a>(&'a self, _job: &'a EngineJob) -> BoxedEngineFuture<'a> {
+            Box::pin(async { Err(EngineError::Reported("unused".to_string())) })
+        }
+    }
+
+    #[test]
+    fn the_default_engine_trait_impl_does_not_claim_web_tools() {
+        assert!(!BareEngine.has_web_tools());
+    }
 }

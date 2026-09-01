@@ -438,6 +438,12 @@ mod tests {
         }
     }
 
+    #[test]
+    fn api_engines_do_not_claim_web_tools() {
+        let engine = engine_at("http://127.0.0.1:9", "openai", Some("sk-test"));
+        assert!(!engine.has_web_tools());
+    }
+
     #[tokio::test]
     async fn the_client_identifies_itself_and_refuses_to_chase_redirects() {
         let body = include_str!("../../tests/fixtures/api/openai_chat.json");
