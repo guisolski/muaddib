@@ -130,9 +130,6 @@ async fn run_stages(
     let plan = expansion_stage(engine, request, tx).await;
     send(tx, SearchEvent::PlanReady(plan.clone())).await;
     let mut research = gather_stage(engine, fetcher, plan, 0, request, tx).await;
-    if research.sub_results.is_empty() {
-        return Err("every sub-query failed; nothing to synthesize".to_string());
-    }
     let answer = compose_stage(engine, fetcher, &mut research, request, tx).await?;
     send(tx, SearchEvent::AnswerReady(Box::new(answer.clone()))).await;
     link_validation_stage(&answer, request, tx).await;
@@ -556,7 +553,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct FakeEngine {
-        fail_markers: Vec<&'static str>,
+        fail_budgets: Mutex<Vec<(&'static str, Option<usize>)>>,
         simple_expansion: bool,
         no_gaps: bool,
         slow_markers: Vec<&'static str>,
@@ -567,7 +564,7 @@ mod tests {
     impl FakeEngine {
         fn reliable() -> Self {
             Self {
-                fail_markers: vec![],
+                fail_budgets: Mutex::new(Vec::new()),
                 simple_expansion: false,
                 no_gaps: false,
                 slow_markers: vec![],
@@ -578,7 +575,14 @@ mod tests {
 
         fn failing_on(markers: &[&'static str]) -> Self {
             Self {
-                fail_markers: markers.to_vec(),
+                fail_budgets: Mutex::new(markers.iter().map(|marker| (*marker, None)).collect()),
+                ..Self::reliable()
+            }
+        }
+
+        fn failing_first_n(marker: &'static str, n: usize) -> Self {
+            Self {
+                fail_budgets: Mutex::new(vec![(marker, Some(n))]),
                 ..Self::reliable()
             }
         }
@@ -587,6 +591,21 @@ mod tests {
             Self {
                 slow_markers: markers.to_vec(),
                 ..Self::reliable()
+            }
+        }
+
+        fn consume_fail_budget(&self, marker: &'static str) -> bool {
+            let mut budgets = self.fail_budgets.lock().unwrap();
+            let Some((_, budget)) = budgets.iter_mut().find(|(m, _)| *m == marker) else {
+                return false;
+            };
+            match budget {
+                None => true,
+                Some(0) => false,
+                Some(left) => {
+                    *left -= 1;
+                    true
+                }
             }
         }
 
@@ -697,7 +716,7 @@ mod tests {
                 self.calls.fetch_add(1, Ordering::SeqCst);
                 self.prompts.lock().unwrap().push(job.prompt.clone());
                 let marker = marker_of(&job.prompt);
-                if self.fail_markers.contains(&marker) {
+                if self.consume_fail_budget(marker) {
                     return Err(EngineError::Reported(format!("forced failure: {marker}")));
                 }
                 if self.slow_markers.contains(&marker) {
@@ -939,12 +958,49 @@ mod tests {
     #[tokio::test]
     async fn total_sub_query_failure_reports_a_search_failure() {
         let events = collect_events(FakeEngine::failing_on(&[SUB_SEARCH_MARKER])).await;
-        assert!(matches!(events.last(), Some(SearchEvent::Failed(_))));
+        let Some(SearchEvent::Failed(message)) = events.last() else {
+            panic!("expected Failed last");
+        };
+        assert!(message.contains("no findings with usable sources"));
         assert!(
             !events
                 .iter()
                 .any(|event| matches!(event, SearchEvent::SynthesisStarted))
         );
+    }
+
+    #[tokio::test]
+    async fn one_sub_query_failure_still_completes() {
+        let events = collect_events(FakeEngine::failing_first_n(SUB_SEARCH_MARKER, 1)).await;
+        let failed = events
+            .iter()
+            .filter(|event| matches!(event, SearchEvent::SubQueryFinished { ok: false, .. }))
+            .count();
+        let succeeded = events
+            .iter()
+            .filter(|event| matches!(event, SearchEvent::SubQueryFinished { ok: true, .. }))
+            .count();
+        assert_eq!(failed, 1);
+        assert_eq!(succeeded, 2);
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert_eq!(answer_in(&events).title, "Compiled");
+    }
+
+    #[tokio::test]
+    async fn all_sub_queries_fail_but_snippets_still_synthesize() {
+        let engine = Arc::new(FakeEngine::failing_on(&[SUB_SEARCH_MARKER]));
+        let fetcher = Arc::new(FakeWebFetcher::returning(vec![web_hit(
+            "https://hit.example/page",
+            "A snippet worth citing.",
+        )]));
+        let events = drain_with(engine, fetcher, websearch_request(true)).await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::SynthesisStarted))
+        );
+        assert_eq!(answer_in(&events).title, "Compiled");
     }
 
     #[tokio::test]
@@ -1029,7 +1085,7 @@ mod tests {
         let Some(SearchEvent::Failed(message)) = events.last() else {
             panic!("expected Failed last");
         };
-        assert!(message.contains("every sub-query failed"));
+        assert!(message.contains("no findings with usable sources"));
     }
 
     #[tokio::test]

@@ -338,16 +338,38 @@ fn submit_query(app: &mut App) -> Option<Command> {
 }
 
 fn open_tree(app: &mut App) {
+    open_tree_focused(app, app.tree.current);
+}
+
+fn open_tree_focused(app: &mut App, focus: Option<NodeId>) {
     if app.tree.nodes.is_empty() {
         app.notice = Some("no research yet".to_string());
         return;
     }
-    app.tree_sel = app
-        .tree
-        .current
-        .and_then(|current| app.tree.flatten().iter().position(|row| row.id == current))
+    app.tree_sel = focus
+        .and_then(|id| app.tree.flatten().iter().position(|row| row.id == id))
         .unwrap_or(0);
     app.screen = Screen::Tree;
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum SearchFailureNav {
+    Home,
+    Tree { focus: Option<NodeId> },
+}
+
+fn search_failure_nav(
+    tree_empty: bool,
+    pending_parent: Option<NodeId>,
+    current: Option<NodeId>,
+) -> SearchFailureNav {
+    if tree_empty {
+        SearchFailureNav::Home
+    } else {
+        SearchFailureNav::Tree {
+            focus: pending_parent.or(current),
+        }
+    }
 }
 
 fn open_follow_up(app: &mut App) {
@@ -776,8 +798,17 @@ fn apply_search_event(app: &mut App, event: SearchEvent) -> Option<Command> {
         }
         SearchOutcome::Failed(message) => {
             app.notice = Some(message);
-            app.pending_parent = None;
-            app.screen = Screen::Home;
+            match search_failure_nav(
+                app.tree.nodes.is_empty(),
+                app.pending_parent,
+                app.tree.current,
+            ) {
+                SearchFailureNav::Home => {
+                    app.pending_parent = None;
+                    app.screen = Screen::Home;
+                }
+                SearchFailureNav::Tree { focus } => open_tree_focused(app, focus),
+            }
         }
         SearchOutcome::Completed | SearchOutcome::None => {}
     }
@@ -1402,15 +1433,112 @@ mod tests {
     }
 
     #[test]
-    fn search_failure_returns_home_with_a_notice() {
-        let mut app = app();
-        app.begin_search();
-        update(
-            &mut app,
-            AppEvent::Search(SearchEvent::Failed("boom".to_string())),
-        );
-        assert_eq!(app.screen, Screen::Home);
-        assert_eq!(app.notice.as_deref(), Some("boom"));
+    fn search_failure_nav_chooses_home_or_tree() {
+        struct Case {
+            name: &'static str,
+            tree_empty: bool,
+            pending_parent: Option<NodeId>,
+            current: Option<NodeId>,
+            want: SearchFailureNav,
+        }
+        let cases = [
+            Case {
+                name: "empty tree goes home",
+                tree_empty: true,
+                pending_parent: Some(7),
+                current: Some(3),
+                want: SearchFailureNav::Home,
+            },
+            Case {
+                name: "tree prefers pending parent as focus",
+                tree_empty: false,
+                pending_parent: Some(7),
+                current: Some(3),
+                want: SearchFailureNav::Tree { focus: Some(7) },
+            },
+            Case {
+                name: "tree without pending focuses current",
+                tree_empty: false,
+                pending_parent: None,
+                current: Some(3),
+                want: SearchFailureNav::Tree { focus: Some(3) },
+            },
+            Case {
+                name: "tree with neither focus stays unfocused",
+                tree_empty: false,
+                pending_parent: None,
+                current: None,
+                want: SearchFailureNav::Tree { focus: None },
+            },
+        ];
+        for case in cases {
+            assert_eq!(
+                search_failure_nav(case.tree_empty, case.pending_parent, case.current),
+                case.want,
+                "{}",
+                case.name
+            );
+        }
+    }
+
+    #[test]
+    fn search_failure_applies_nav_and_notice() {
+        struct Case {
+            name: &'static str,
+            with_tree: bool,
+            set_pending: bool,
+            want_screen: Screen,
+            want_pending_kept: bool,
+        }
+        let cases = [
+            Case {
+                name: "empty tree returns home and clears pending",
+                with_tree: false,
+                set_pending: false,
+                want_screen: Screen::Home,
+                want_pending_kept: false,
+            },
+            Case {
+                name: "existing tree opens tree and keeps pending",
+                with_tree: true,
+                set_pending: true,
+                want_screen: Screen::Tree,
+                want_pending_kept: true,
+            },
+        ];
+        for case in cases {
+            let mut app = if case.with_tree {
+                searched_app()
+            } else {
+                app()
+            };
+            let pending = app.tree.current;
+            if case.set_pending {
+                app.pending_parent = pending;
+            }
+            app.begin_search();
+            update(
+                &mut app,
+                AppEvent::Search(SearchEvent::Failed("boom".to_string())),
+            );
+            assert_eq!(app.screen, case.want_screen, "{}", case.name);
+            assert_eq!(app.notice.as_deref(), Some("boom"), "{}", case.name);
+            assert_eq!(
+                app.pending_parent.is_some(),
+                case.want_pending_kept,
+                "{}",
+                case.name
+            );
+            if case.want_pending_kept {
+                assert_eq!(app.pending_parent, pending, "{}", case.name);
+                assert_eq!(
+                    app.tree.flatten().get(app.tree_sel).map(|row| row.id),
+                    pending,
+                    "{}",
+                    case.name
+                );
+            }
+        }
     }
 
     #[test]

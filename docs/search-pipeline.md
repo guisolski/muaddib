@@ -108,7 +108,8 @@ Each sub-search prompt demands findings with exact URLs:
 
 `image_url` is optional: the direct URL of a relevant image (photo, chart,
 figure) on the consulted page. A failed sub-query is dropped (with a `SubQueryFinished { ok: false }` event);
-the pipeline continues as long as at least one succeeds and produces findings.
+the pipeline continues as long as at least one succeeds — or, with
+`merge_snippets`, as long as web hits still yield usable findings after merge.
 
 An engine whose `EngineSpec.streams` is set (only `claude` today) is read line by
 line rather than buffered to completion, so its own tool calls surface while the
@@ -321,7 +322,8 @@ that is all Esc does.
 | Web engine blocked, captcha, or markup drift | zero hits from that engine, waterfall tries the next one |
 | All web engines fail or time out | no grounding block in the prompts, AI-only search continues |
 | Some sub-queries fail | dropped; the rest proceed |
-| All sub-queries fail | `Failed("every sub-query failed…")` |
+| All sub-queries fail, but `merge_snippets` has usable web hits | synthesize from snippets |
+| All sub-queries fail and no usable merged findings | `Failed("…no findings with usable sources")` |
 | No findings with usable URLs | `Failed("…no findings with usable sources")` |
 | Synthesis fails / invalid JSON | `Failed` with the reason |
 | Fast call fails, times out, or returns invalid JSON | `Failed("fast search …")`; nothing to degrade to |
@@ -330,3 +332,5 @@ that is all Esc does.
 | Synthesis invents an image URL | image block removed from the answer |
 | Link check fails | source marked ✗, answer unaffected |
 | Image fetch fails or is not an image | "image unavailable" note, answer unaffected |
+| Search hard-fails in the TUI while a research tree exists | stay on the tree screen with the notice; keep `pending_parent` so the follow-up can be retried |
+| Search hard-fails with an empty tree | return Home with the notice |
