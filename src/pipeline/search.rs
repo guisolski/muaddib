@@ -163,13 +163,14 @@ async fn compose_stage(
     tx: &mpsc::Sender<SearchEvent>,
 ) -> Result<Answer, String> {
     let merged = merged_findings(
+        engine,
         &research.sub_results,
         &research.plan,
         &research.hits,
         request,
     );
     if merged.findings.is_empty() {
-        return Err("the searches produced no findings with usable sources".to_string());
+        return Err(empty_findings_error(engine));
     }
     send(tx, SearchEvent::SynthesisStarted).await;
     let draft = synthesis_stage(
@@ -234,6 +235,7 @@ async fn reflect_once(
     }
     research.extend(&found.plan.sub_queries, found.hits, found.sub_results);
     let merged = merged_findings(
+        engine,
         &research.sub_results,
         &research.plan,
         &research.hits,
@@ -278,12 +280,13 @@ async fn critique_stage(
 }
 
 fn merged_findings(
+    engine: &dyn Engine,
     sub_results: &[SubResult],
     plan: &SearchPlan,
     hits: &[Vec<WebHit>],
     request: &SearchRequest,
 ) -> MergedFindings {
-    if request.websearch.merge_snippets {
+    let merged = if request.websearch.merge_snippets {
         let combined: Vec<SubResult> = sub_results
             .iter()
             .cloned()
@@ -292,6 +295,20 @@ fn merged_findings(
         merge_sub_results(&combined)
     } else {
         merge_sub_results(sub_results)
+    };
+    if merged.findings.is_empty() && !engine.has_web_tools() && request.websearch.enabled {
+        merge_sub_results(&snippet_sub_results(&plan.sub_queries, hits))
+    } else {
+        merged
+    }
+}
+
+fn empty_findings_error(engine: &dyn Engine) -> String {
+    if engine.has_web_tools() {
+        "the searches produced no findings with usable sources".to_string()
+    } else {
+        "the searches produced no findings with usable sources; web-search grounding returned no citable hits"
+            .to_string()
     }
 }
 
@@ -556,6 +573,8 @@ mod tests {
         fail_budgets: Mutex<Vec<(&'static str, Option<usize>)>>,
         simple_expansion: bool,
         no_gaps: bool,
+        empty_sub_findings: bool,
+        web_tools: bool,
         slow_markers: Vec<&'static str>,
         calls: AtomicUsize,
         prompts: Mutex<Vec<String>>,
@@ -567,9 +586,27 @@ mod tests {
                 fail_budgets: Mutex::new(Vec::new()),
                 simple_expansion: false,
                 no_gaps: false,
+                empty_sub_findings: false,
+                web_tools: true,
                 slow_markers: vec![],
                 calls: AtomicUsize::new(0),
                 prompts: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn empty_sub_findings() -> Self {
+            Self {
+                empty_sub_findings: true,
+                web_tools: false,
+                ..Self::reliable()
+            }
+        }
+
+        fn empty_sub_findings_with_web_tools() -> Self {
+            Self {
+                empty_sub_findings: true,
+                web_tools: true,
+                ..Self::reliable()
             }
         }
 
@@ -645,6 +682,9 @@ mod tests {
                     {"query":"tema em detalhe","lang":"pt-BR","rationale":"facet"}
                 ]}"#
                     .to_string(),
+                SUB_SEARCH_MARKER if self.empty_sub_findings => {
+                    r#"{"summary":"","findings":[]}"#.to_string()
+                }
                 SUB_SEARCH_MARKER => r#"{"summary":"found things","findings":[
                     {"claim":"claim one","source_title":"One","source_url":"https://one.example/a","lang":"en","image_url":"https://one.example/figure.png"},
                     {"claim":"claim two","source_title":"Two","source_url":"https://two.example/b","lang":"en"}
@@ -709,6 +749,10 @@ mod tests {
     impl Engine for FakeEngine {
         fn name(&self) -> &'static str {
             "fake"
+        }
+
+        fn has_web_tools(&self) -> bool {
+            self.web_tools
         }
 
         fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a> {
@@ -1001,6 +1045,42 @@ mod tests {
                 .any(|event| matches!(event, SearchEvent::SynthesisStarted))
         );
         assert_eq!(answer_in(&events).title, "Compiled");
+    }
+
+    #[tokio::test]
+    async fn engines_without_web_tools_fall_back_to_web_hits_when_findings_are_empty() {
+        let engine = Arc::new(FakeEngine::empty_sub_findings());
+        let fetcher = Arc::new(FakeWebFetcher::returning(vec![web_hit(
+            "https://hit.example/page",
+            "A snippet worth citing.",
+        )]));
+        let events = drain_with(engine, fetcher, websearch_request(false)).await;
+        assert!(matches!(events.last(), Some(SearchEvent::Completed)));
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::SynthesisStarted))
+        );
+        assert_eq!(answer_in(&events).title, "Compiled");
+    }
+
+    #[tokio::test]
+    async fn engines_with_web_tools_do_not_auto_merge_web_hits() {
+        let engine = Arc::new(FakeEngine::empty_sub_findings_with_web_tools());
+        let fetcher = Arc::new(FakeWebFetcher::returning(vec![web_hit(
+            "https://hit.example/page",
+            "A snippet worth citing.",
+        )]));
+        let events = drain_with(engine, fetcher, websearch_request(false)).await;
+        let Some(SearchEvent::Failed(message)) = events.last() else {
+            panic!("expected Failed last");
+        };
+        assert!(message.contains("no findings with usable sources"));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, SearchEvent::SynthesisStarted))
+        );
     }
 
     #[tokio::test]

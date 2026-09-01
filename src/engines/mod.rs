@@ -26,6 +26,10 @@ pub trait Engine: Send + Sync {
         false
     }
 
+    fn has_web_tools(&self) -> bool {
+        false
+    }
+
     fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a>;
 
     fn run_reporting<'a>(

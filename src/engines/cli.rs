@@ -96,6 +96,10 @@ impl Engine for CliEngine {
         self.spec.supports_json_schema
     }
 
+    fn has_web_tools(&self) -> bool {
+        self.cli.web_tools
+    }
+
     fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a> {
         Box::pin(self.run_cli(job, None))
     }
@@ -155,6 +159,7 @@ mod tests {
         streams: false,
         parse: ParseStrategy::RawText,
         model_flag: None,
+        web_tools: false,
     };
 
     const ECHO_SPEC: EngineSpec = EngineSpec {
@@ -176,6 +181,7 @@ mod tests {
         streams: false,
         parse: ParseStrategy::RawText,
         model_flag: None,
+        web_tools: false,
     };
 
     const FAILING_SPEC: EngineSpec = EngineSpec {
@@ -197,6 +203,7 @@ mod tests {
         streams: false,
         parse: ParseStrategy::RawText,
         model_flag: None,
+        web_tools: false,
     };
 
     const SLEEPING_SPEC: EngineSpec = EngineSpec {
@@ -233,6 +240,7 @@ mod tests {
         streams: false,
         parse: ParseStrategy::RawText,
         model_flag: Some("--model"),
+        web_tools: false,
     };
 
     const MODEL_ECHO_SPEC: EngineSpec = EngineSpec {
@@ -302,6 +310,7 @@ mod tests {
         streams: true,
         parse: ParseStrategy::ClaudeJson,
         model_flag: None,
+        web_tools: true,
     };
 
     const STREAMING_SPEC: EngineSpec = EngineSpec {
@@ -323,6 +332,7 @@ mod tests {
         streams: false,
         parse: ParseStrategy::ClaudeJson,
         model_flag: None,
+        web_tools: true,
     };
 
     const QUIET_SPEC: EngineSpec = EngineSpec {

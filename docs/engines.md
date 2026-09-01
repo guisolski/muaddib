@@ -26,7 +26,7 @@ the API transport did not spread `match` arms through the codebase.
 | name | binary | argv (before the prompt) | streams | parse strategy | JSON schema | fast model |
 |---|---|---|---|---|---|---|
 | `claude` | `claude` | `-p --output-format stream-json --verbose --allowedTools=WebSearch,WebFetch` | ✓ | `ClaudeJson` | ✓ `--json-schema` | `haiku` |
-| `cursor-agent` | `cursor-agent` | `-p --output-format json` | — | `GenericJson` | prompt-enforced | — |
+| `cursor-agent` | `cursor-agent` | `-p --output-format json --force` | — | `GenericJson` | prompt-enforced | — |
 | `codex` | `codex` | `exec --skip-git-repo-check` | — | `RawText` | prompt-enforced | — |
 | `opencode` | `opencode` | `run` | — | `RawText` | prompt-enforced | — |
 
@@ -50,6 +50,11 @@ ships one, because it is the only engine whose model lineup has an unambiguous
 > `--allowedTools` must use the `=` form: the flag is variadic in the claude CLI
 > and would otherwise swallow the trailing prompt argument (found the hard way,
 > during the live checkpoint).
+
+Only `claude` declares `web_tools` in its CLI row. Engines without built-in web
+search (`cursor-agent`, `codex`, `opencode`) rely on muaddib's built-in web-search
+grounding; when their sub-searches return no citable URLs, the pipeline automatically
+merges web-hit snippets into the findings before synthesis.
 
 ### API rows
 
@@ -160,9 +165,9 @@ was built; see ADR-0015).
      `result` string; surfaces `is_error: true` as `EngineError::Reported`.
      Stdout may be either one JSON object or a JSONL stream: the whole-buffer
      parse is tried first, then the **last** `"type":"result"` line.
-   - `GenericJson` — parses stdout (or its last non-empty line) as JSON and
-     probes a key table: `result`, `text`, `response`, `content`, `message`,
-     `output`.
+   - `GenericJson` — parses stdout (or its last non-empty line) as JSON,
+     surfaces `is_error: true` as `EngineError::Reported`, and probes a key
+     table: `result`, `text`, `response`, `content`, `message`, `output`.
    - `RawText` — passes stdout through unchanged.
    Every strategy degrades to raw text rather than failing.
 2. **Extraction layer** (`core/extract.rs`), always applied to the inner text:

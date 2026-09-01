@@ -33,6 +33,7 @@ pub struct CliSpec {
     pub streams: bool,
     pub parse: ParseStrategy,
     pub model_flag: Option<&'static str>,
+    pub web_tools: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -69,6 +70,10 @@ impl EngineSpec {
             Transport::Cli(_) => None,
         }
     }
+
+    pub fn has_web_tools(&self) -> bool {
+        self.cli().is_some_and(|cli| cli.web_tools)
+    }
 }
 
 pub const STREAM_FORMAT_ARG: &str = "stream-json";
@@ -85,14 +90,16 @@ const CLAUDE_CLI: CliSpec = CliSpec {
     streams: true,
     parse: ParseStrategy::ClaudeJson,
     model_flag: Some("--model"),
+    web_tools: true,
 };
 
 const CURSOR_AGENT_CLI: CliSpec = CliSpec {
     bin: "cursor-agent",
-    args: &["-p", "--output-format", "json"],
+    args: &["-p", "--output-format", "json", "--force"],
     streams: false,
     parse: ParseStrategy::GenericJson,
     model_flag: Some("--model"),
+    web_tools: false,
 };
 
 const CODEX_CLI: CliSpec = CliSpec {
@@ -101,6 +108,7 @@ const CODEX_CLI: CliSpec = CliSpec {
     streams: false,
     parse: ParseStrategy::RawText,
     model_flag: Some("--model"),
+    web_tools: false,
 };
 
 const OPENCODE_CLI: CliSpec = CliSpec {
@@ -109,6 +117,7 @@ const OPENCODE_CLI: CliSpec = CliSpec {
     streams: false,
     parse: ParseStrategy::RawText,
     model_flag: Some("--model"),
+    web_tools: false,
 };
 
 const OLLAMA_API: ApiSpec = ApiSpec {
@@ -471,7 +480,7 @@ pub fn choose_engine<'a>(
 pub fn envelope_text(strategy: ParseStrategy, stdout: &str) -> Result<String, EngineError> {
     match strategy {
         ParseStrategy::ClaudeJson => claude_envelope_text(stdout),
-        ParseStrategy::GenericJson => Ok(generic_envelope_text(stdout)),
+        ParseStrategy::GenericJson => generic_envelope_text(stdout),
         ParseStrategy::RawText => Ok(stdout.to_string()),
     }
 }
@@ -518,23 +527,26 @@ fn reported_error_text(envelope: &Value) -> String {
 
 const GENERIC_TEXT_KEYS: &[&str] = &["result", "text", "response", "content", "message", "output"];
 
-fn generic_envelope_text(stdout: &str) -> String {
-    envelope_from_json_text(stdout)
-        .or_else(|| envelope_from_last_line(stdout))
-        .unwrap_or_else(|| stdout.to_string())
+fn generic_envelope_text(stdout: &str) -> Result<String, EngineError> {
+    generic_envelope_from_json_text(stdout.trim())
+        .or_else(|| generic_envelope_from_last_line(stdout))
+        .unwrap_or_else(|| Ok(stdout.to_string()))
 }
 
-fn envelope_from_json_text(text: &str) -> Option<String> {
-    let value = serde_json::from_str::<Value>(text.trim()).ok()?;
-    probe_text_keys(&value)
+fn generic_envelope_from_json_text(text: &str) -> Option<Result<String, EngineError>> {
+    let value = serde_json::from_str::<Value>(text).ok()?;
+    if value.get("is_error").and_then(Value::as_bool) == Some(true) {
+        return Some(Err(EngineError::Reported(reported_error_text(&value))));
+    }
+    probe_text_keys(&value).map(Ok)
 }
 
-fn envelope_from_last_line(stdout: &str) -> Option<String> {
+fn generic_envelope_from_last_line(stdout: &str) -> Option<Result<String, EngineError>> {
     stdout
         .lines()
         .rev()
         .find(|line| !line.trim().is_empty())
-        .and_then(envelope_from_json_text)
+        .and_then(|line| generic_envelope_from_json_text(line.trim()))
 }
 
 fn probe_text_keys(value: &Value) -> Option<String> {
@@ -1066,6 +1078,51 @@ mod tests {
         for case in cases {
             let text = envelope_text(ParseStrategy::GenericJson, case.input).unwrap();
             assert_eq!(text, case.want, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn generic_strategy_surfaces_reported_errors() {
+        let input = r#"{"type":"result","is_error":true,"result":"rate limit exceeded"}"#;
+        let error = envelope_text(ParseStrategy::GenericJson, input).unwrap_err();
+        assert_eq!(
+            error,
+            EngineError::Reported("rate limit exceeded".to_string())
+        );
+    }
+
+    #[test]
+    fn only_claude_declares_web_tools() {
+        struct Case {
+            name: &'static str,
+            engine: &'static str,
+            want: bool,
+        }
+        let cases = [
+            Case {
+                name: "claude",
+                engine: "claude",
+                want: true,
+            },
+            Case {
+                name: "cursor-agent",
+                engine: "cursor-agent",
+                want: false,
+            },
+            Case {
+                name: "codex",
+                engine: "codex",
+                want: false,
+            },
+            Case {
+                name: "opencode",
+                engine: "opencode",
+                want: false,
+            },
+        ];
+        for case in cases {
+            let spec = engine_by_name(case.engine).unwrap();
+            assert_eq!(spec.has_web_tools(), case.want, "{}", case.name);
         }
     }
 

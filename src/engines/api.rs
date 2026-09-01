@@ -190,6 +190,10 @@ impl Engine for ApiEngine {
         self.spec.supports_json_schema
     }
 
+    fn has_web_tools(&self) -> bool {
+        false
+    }
+
     fn run<'a>(&'a self, job: &'a EngineJob) -> BoxedEngineFuture<'a> {
         Box::pin(self.run_api(job, None))
     }
